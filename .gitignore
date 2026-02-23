@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+.output/
+.nuxt/
+.nitro/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Docker volumes (host-side data, not tracked)
+infra/volumes/uploads/*
+infra/volumes/data/*
+!infra/volumes/uploads/.gitkeep
+!infra/volumes/data/.gitkeep
+
+# TypeScript cache
+*.tsbuildinfo

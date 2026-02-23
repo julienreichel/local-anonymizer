@@ -1,0 +1,23 @@
+{
+  "name": "local-anonymizer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OS-agnostic local chat-log anonymizer powered by Microsoft Presidio",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel -r run dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test",
+    "typecheck": "pnpm -r run typecheck",
+    "docker:up": "docker compose -f docker-compose.yml up --build",
+    "docker:down": "docker compose -f docker-compose.yml down"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
