@@ -21,29 +21,48 @@ const LANGUAGE = process.env.LANGUAGE ?? 'en'
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 
-async function createLogEntry(
-  fileNameHash: string,
-  byteSize: number,
+async function createRun(
+  sourceFileName: string,
+  sourceFileSize: number,
   status: string,
 ): Promise<string> {
-  const res = await fetch(`${API_URL}/api/logs`, {
+  const res = await fetch(`${API_URL}/api/runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file_name_hash: fileNameHash, byte_size: byteSize, status }),
+    body: JSON.stringify({
+      sourceType: 'folderUpload',
+      sourceFileName,
+      sourceFileSize,
+      status,
+    }),
   })
-  const json = (await res.json()) as { success: boolean; data: { id: string } }
+  const json = (await res.json()) as { ok: boolean; data: { id: string } }
   return json.data.id
 }
 
-async function updateLogEntry(
+async function updateRun(
   id: string,
-  status: string,
-  errorMessage?: string,
+  fields: Record<string, unknown>,
 ): Promise<void> {
-  await fetch(`${API_URL}/api/logs/${id}`, {
+  await fetch(`${API_URL}/api/runs/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status, error_message: errorMessage }),
+    body: JSON.stringify(fields),
+  })
+}
+
+async function appendLog(
+  runId: string | undefined,
+  eventType: string,
+  level: string,
+  meta?: Record<string, unknown>,
+): Promise<void> {
+  await fetch(`${API_URL}/api/logs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runId, eventType, level, meta }),
+  }).catch(() => {
+    // Audit log failures are non-fatal
   })
 }
 
@@ -77,10 +96,10 @@ async function anonymizeText(
 
 // ── Delivery helper ─────────────────────────────────────────────────────────
 
-async function deliverPayload(payload: AnonymizationResult): Promise<void> {
+async function deliverPayload(payload: AnonymizationResult): Promise<number | null> {
   if (!TARGET_URL) {
     console.warn('[worker] TARGET_URL not set – skipping delivery')
-    return
+    return null
   }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (TARGET_AUTH_HEADER) headers['Authorization'] = TARGET_AUTH_HEADER
@@ -91,6 +110,7 @@ async function deliverPayload(payload: AnonymizationResult): Promise<void> {
     signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`Delivery target HTTP ${res.status}`)
+  return res.status
 }
 
 // ── File processing ─────────────────────────────────────────────────────────
@@ -118,22 +138,28 @@ export async function processFile(filePath: string): Promise<void> {
     return
   }
 
-  // Log: only metadata – no raw filename, no content
+  // Store only a sanitized reference: hash of filename – no raw path or content
   const fileNameHash = hashString(fileName)
+  const sourceFileName = `sha256:${fileNameHash}`
   console.log(`[worker] Processing file hash=${fileNameHash} size=${byteSize}`)
 
-  let logId: string | null = null
+  const startMs = Date.now()
+  let runId: string | null = null
   try {
-    logId = await createLogEntry(fileNameHash, byteSize, 'processing')
+    runId = await createRun(sourceFileName, byteSize, 'processing')
+    await appendLog(runId, 'anonymize_started', 'info')
   } catch (e) {
-    console.error('[worker] Could not create log entry:', (e as Error).message)
+    console.error('[worker] Could not create run entry:', (e as Error).message)
   }
 
   let raw: string
   try {
     raw = await fs.readFile(filePath, 'utf-8')
   } catch {
-    if (logId) await updateLogEntry(logId, 'failed', 'Could not read file')
+    if (runId) {
+      await updateRun(runId, { status: 'failed', errorCode: 'READ_ERROR', errorMessageSafe: 'Could not read file' })
+      await appendLog(runId, 'run_failed', 'error', { errorCode: 'READ_ERROR' })
+    }
     return
   }
 
@@ -143,12 +169,17 @@ export async function processFile(filePath: string): Promise<void> {
     chatLog = ChatLogSchema.parse(JSON.parse(raw))
   } catch (e) {
     console.error(`[worker] Invalid chat log schema hash=${fileNameHash}:`, (e as Error).message)
-    if (logId) await updateLogEntry(logId, 'failed', 'Invalid schema')
+    if (runId) {
+      await updateRun(runId, { status: 'failed', errorCode: 'INVALID_SCHEMA', errorMessageSafe: 'Invalid schema' })
+      await appendLog(runId, 'run_failed', 'error', { errorCode: 'INVALID_SCHEMA' })
+    }
     return
   }
 
   // Anonymize each message
   const anonymizedMessages: AnonymizedMessage[] = []
+  const presidioStats: Record<string, number> = {}
+
   for (const msg of chatLog.messages) {
     try {
       const analysisResults = await analyzeText(msg.content)
@@ -162,9 +193,15 @@ export async function processFile(filePath: string): Promise<void> {
         timestamp: msg.timestamp,
         entities_found: analysisResults.length,
       })
+      for (const r of analysisResults) {
+        presidioStats[r.entity_type] = (presidioStats[r.entity_type] ?? 0) + 1
+      }
     } catch (e) {
       console.error(`[worker] Presidio error for message ${msg.id}:`, (e as Error).message)
-      if (logId) await updateLogEntry(logId, 'failed', `Presidio error: ${(e as Error).message}`)
+      if (runId) {
+        await updateRun(runId, { status: 'failed', errorCode: 'PRESIDIO_ERROR', errorMessageSafe: `Presidio error: ${(e as Error).message}` })
+        await appendLog(runId, 'run_failed', 'error', { errorCode: 'PRESIDIO_ERROR' })
+      }
       return
     }
   }
@@ -178,22 +215,48 @@ export async function processFile(filePath: string): Promise<void> {
   }
 
   // Mark as anonymized
-  if (logId) await updateLogEntry(logId, 'anonymized')
+  if (runId) {
+    await updateRun(runId, { status: 'anonymized', presidioStats })
+    await appendLog(runId, 'anonymize_succeeded', 'info', { entityCount: Object.values(presidioStats).reduce((a, b) => a + b, 0) })
+  }
 
   // Deliver
+  const deliveryStart = Date.now()
   try {
-    await deliverPayload(result)
-    if (logId) await updateLogEntry(logId, 'delivered')
+    const statusCode = await deliverPayload(result)
+    const deliveryDurationMs = Date.now() - deliveryStart
+    if (runId) {
+      await updateRun(runId, {
+        status: 'delivered',
+        deliveryStatusCode: statusCode ?? undefined,
+        deliveryDurationMs,
+        durationMs: Date.now() - startMs,
+      })
+      await appendLog(runId, 'delivery_succeeded', 'info', { statusCode, deliveryDurationMs })
+    }
     console.log(`[worker] Delivered hash=${fileNameHash}`)
   } catch (e) {
     console.error(`[worker] Delivery failed hash=${fileNameHash}:`, (e as Error).message)
-    if (logId) await updateLogEntry(logId, 'failed', `Delivery error: ${(e as Error).message}`)
+    if (runId) {
+      await updateRun(runId, {
+        status: 'failed',
+        errorCode: 'DELIVERY_ERROR',
+        errorMessageSafe: `Delivery error: ${(e as Error).message}`,
+        deliveryDurationMs: Date.now() - deliveryStart,
+        durationMs: Date.now() - startMs,
+      })
+      await appendLog(runId, 'run_failed', 'error', { errorCode: 'DELIVERY_ERROR' })
+    }
     return
   }
 
   // Remove original file after successful delivery
   try {
     await fs.unlink(filePath)
+    if (runId) {
+      await updateRun(runId, { status: 'deleted' })
+      await appendLog(runId, 'cleanup_deleted', 'info')
+    }
     console.log(`[worker] Removed processed file hash=${fileNameHash}`)
   } catch (e) {
     console.warn(`[worker] Could not remove file hash=${fileNameHash}:`, (e as Error).message)
