@@ -2,10 +2,50 @@
   <UContainer class="py-8">
     <div class="flex items-center justify-between mb-8">
       <h1 class="text-2xl font-bold">Local Anonymizer</h1>
-      <UBadge color="green" variant="soft">Running</UBadge>
+      <div class="flex items-center gap-2">
+        <UBadge :color="apiStatusColor" variant="soft">
+          {{ healthData?.status === 'ok' ? 'Running' : 'Unreachable' }}
+        </UBadge>
+        <UButton size="xs" variant="ghost" icon="i-heroicons-arrow-path" :loading="healthPending" @click="refreshAll">
+          Refresh
+        </UButton>
+      </div>
     </div>
 
-    <div class="grid gap-6 md:grid-cols-2">
+    <!-- System Status -->
+    <UCard class="mb-6">
+      <template #header>
+        <h2 class="text-lg font-semibold">System Status</h2>
+      </template>
+      <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div class="flex flex-col items-center gap-1">
+          <UIcon :name="serviceIcon('ok')" class="w-6 h-6 text-green-500" />
+          <span class="text-xs font-medium">API</span>
+          <UBadge color="green" variant="soft" size="xs">ok</UBadge>
+        </div>
+        <div class="flex flex-col items-center gap-1">
+          <UIcon :name="serviceIcon(workerStatus)" class="w-6 h-6" :class="serviceIconColor(workerStatus)" />
+          <span class="text-xs font-medium">Worker</span>
+          <UBadge :color="serviceColor(workerStatus)" variant="soft" size="xs">{{ workerStatus }}</UBadge>
+        </div>
+        <div class="flex flex-col items-center gap-1">
+          <UIcon :name="serviceIcon(healthData?.services?.presidioAnalyzer ?? 'unknown')" class="w-6 h-6" :class="serviceIconColor(healthData?.services?.presidioAnalyzer ?? 'unknown')" />
+          <span class="text-xs font-medium">Presidio Analyzer</span>
+          <UBadge :color="serviceColor(healthData?.services?.presidioAnalyzer ?? 'unknown')" variant="soft" size="xs">
+            {{ healthData?.services?.presidioAnalyzer ?? 'unknown' }}
+          </UBadge>
+        </div>
+        <div class="flex flex-col items-center gap-1">
+          <UIcon :name="serviceIcon(healthData?.services?.presidioAnonymizer ?? 'unknown')" class="w-6 h-6" :class="serviceIconColor(healthData?.services?.presidioAnonymizer ?? 'unknown')" />
+          <span class="text-xs font-medium">Presidio Anonymizer</span>
+          <UBadge :color="serviceColor(healthData?.services?.presidioAnonymizer ?? 'unknown')" variant="soft" size="xs">
+            {{ healthData?.services?.presidioAnonymizer ?? 'unknown' }}
+          </UBadge>
+        </div>
+      </div>
+    </UCard>
+
+    <div class="grid gap-6 md:grid-cols-2 mb-6">
       <!-- Stats card -->
       <UCard>
         <template #header>
@@ -13,7 +53,7 @@
         </template>
         <dl class="grid grid-cols-2 gap-4">
           <div>
-            <dt class="text-sm text-gray-500">Total processed</dt>
+            <dt class="text-sm text-gray-500">Total runs</dt>
             <dd class="text-2xl font-bold">{{ stats.total }}</dd>
           </div>
           <div>
@@ -25,7 +65,7 @@
             <dd class="text-2xl font-bold text-red-600">{{ stats.failed }}</dd>
           </div>
           <div>
-            <dt class="text-sm text-gray-500">Pending</dt>
+            <dt class="text-sm text-gray-500">In progress</dt>
             <dd class="text-2xl font-bold text-yellow-600">{{ stats.pending }}</dd>
           </div>
         </dl>
@@ -37,36 +77,50 @@
           <h2 class="text-lg font-semibold">Quick Links</h2>
         </template>
         <div class="flex flex-col gap-3">
-          <UButton to="/logs" variant="outline" icon="i-heroicons-document-text">
-            View Processing Logs
+          <UButton to="/runs" variant="outline" icon="i-heroicons-list-bullet">
+            View Runs
+          </UButton>
+          <UButton to="/targets" variant="outline" icon="i-heroicons-arrow-up-tray">
+            Manage Targets
           </UButton>
           <UButton to="/config" variant="outline" icon="i-heroicons-cog-6-tooth">
-            Configure Target
+            Configuration
           </UButton>
         </div>
       </UCard>
     </div>
 
-    <!-- Recent activity -->
-    <UCard class="mt-6">
+    <!-- Recent runs -->
+    <UCard>
       <template #header>
         <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Recent Activity</h2>
-          <UButton size="xs" variant="ghost" icon="i-heroicons-arrow-path" @click="refresh">
+          <h2 class="text-lg font-semibold">Recent Runs</h2>
+          <UButton size="xs" variant="ghost" icon="i-heroicons-arrow-path" @click="refreshAll">
             Refresh
           </UButton>
         </div>
       </template>
-      <UTable :rows="recentLogs" :columns="columns" :loading="pending">
+      <UTable :rows="recentRuns" :columns="columns" :loading="runsPending">
         <template #status-data="{ row }">
           <UBadge :color="statusColor(row.status)" variant="soft" size="xs">
             {{ row.status }}
           </UBadge>
         </template>
+        <template #durationMs-data="{ row }">
+          <span class="text-sm text-gray-500">{{ row.durationMs != null ? `${row.durationMs} ms` : '–' }}</span>
+        </template>
+        <template #createdAt-data="{ row }">
+          <span class="text-sm text-gray-500">{{ formatDate(row.createdAt) }}</span>
+        </template>
+        <template #actions-data="{ row }">
+          <UButton size="xs" variant="ghost" icon="i-heroicons-eye" :to="`/runs?id=${row.id}`">
+            Details
+          </UButton>
+        </template>
         <template #empty-state>
           <div class="flex flex-col items-center justify-center py-8 text-gray-400">
             <UIcon name="i-heroicons-inbox" class="w-8 h-8 mb-2" />
-            <p>No files processed yet. Drop a JSON chat log into the uploads folder.</p>
+            <p>No runs yet. Drop a JSON chat log into the uploads folder.</p>
           </div>
         </template>
       </UTable>
@@ -75,48 +129,92 @@
 </template>
 
 <script setup lang="ts">
-const { apiBase } = useRuntimeConfig().public
+const api = useApi()
 
-interface LogEntry {
-  id: string
-  file_name_hash: string
-  byte_size: number
-  status: string
-  created_at: string
-}
+// Health check
+const { data: rawHealth, pending: healthPending, refresh: refreshHealth } = await useLazyAsyncData(
+  'health',
+  () => api.getHealth(),
+  { default: () => null },
+)
+const healthData = computed(() => rawHealth.value)
+const apiStatusColor = computed<'green' | 'red'>(() => (healthData.value?.status === 'ok' ? 'green' : 'red'))
 
-const { data, pending, refresh } = await useFetch<{ success: boolean; data: LogEntry[] }>(
-  `${apiBase}/api/logs`,
-  { default: () => ({ success: true, data: [] }) },
+// Infer worker status from recent run activity.
+// The worker doesn't expose its own health endpoint, so we approximate:
+// if there are active (queued/processing) runs, the worker is likely running.
+// When idle this shows 'unknown', not necessarily meaning the worker is down.
+const workerStatus = computed(() => {
+  if (!rawRuns.value) return 'unknown' as const
+  // If there are runs in non-terminal state, worker is likely active
+  const active = rawRuns.value.some((r) => ['queued', 'processing'].includes(r.status))
+  return active ? 'ok' : ('unknown' as const)
+})
+
+// Runs list
+const { data: rawRuns, pending: runsPending, refresh: refreshRuns } = await useLazyAsyncData(
+  'dashboard-runs',
+  () => api.getRuns({ limit: 10 }),
+  { default: () => [] },
 )
 
-const recentLogs = computed(() => data.value?.data?.slice(0, 10) ?? [])
+const recentRuns = computed(() => rawRuns.value ?? [])
 
 const stats = computed(() => {
-  const logs = data.value?.data ?? []
+  const runs = rawRuns.value ?? []
   return {
-    total: logs.length,
-    delivered: logs.filter((l) => l.status === 'delivered').length,
-    failed: logs.filter((l) => l.status === 'failed').length,
-    pending: logs.filter((l) => ['pending', 'processing', 'anonymized'].includes(l.status)).length,
+    total: runs.length,
+    delivered: runs.filter((r) => r.status === 'delivered').length,
+    failed: runs.filter((r) => r.status === 'failed').length,
+    pending: runs.filter((r) => ['queued', 'processing', 'anonymized'].includes(r.status)).length,
   }
 })
 
 const columns = [
-  { key: 'file_name_hash', label: 'File Hash' },
-  { key: 'byte_size', label: 'Size (bytes)' },
+  { key: 'sourceFileName', label: 'File Hash' },
   { key: 'status', label: 'Status' },
-  { key: 'created_at', label: 'Created At' },
+  { key: 'durationMs', label: 'Duration' },
+  { key: 'createdAt', label: 'Created At' },
+  { key: 'actions', label: '' },
 ]
 
-function statusColor(status: string) {
-  const map: Record<string, string> = {
+function statusColor(status: string): 'green' | 'red' | 'blue' | 'purple' | 'yellow' | 'gray' {
+  const map: Record<string, 'green' | 'red' | 'blue' | 'purple' | 'yellow' | 'gray'> = {
     delivered: 'green',
     failed: 'red',
     processing: 'blue',
     anonymized: 'purple',
-    pending: 'yellow',
+    queued: 'yellow',
+    deleted: 'gray',
   }
   return map[status] ?? 'gray'
+}
+
+type ServiceStatus = 'ok' | 'error' | 'unknown'
+
+function serviceIcon(status: string) {
+  if (status === 'ok') return 'i-heroicons-check-circle'
+  if (status === 'error') return 'i-heroicons-x-circle'
+  return 'i-heroicons-question-mark-circle'
+}
+
+function serviceIconColor(status: string) {
+  if (status === 'ok') return 'text-green-500'
+  if (status === 'error') return 'text-red-500'
+  return 'text-gray-400'
+}
+
+function serviceColor(status: string): 'green' | 'red' | 'gray' {
+  if (status === 'ok') return 'green'
+  if (status === 'error') return 'red'
+  return 'gray'
+}
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleString()
+}
+
+async function refreshAll() {
+  await Promise.all([refreshHealth(), refreshRuns()])
 }
 </script>

@@ -32,9 +32,10 @@ describe('GET /api/health', () => {
   it('returns ok', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/health' })
     expect(res.statusCode).toBe(200)
-    const body = res.json<{ ok: boolean; data: { status: string } }>()
+    const body = res.json<{ ok: boolean; data: { status: string; services: Record<string, string> } }>()
     expect(body.ok).toBe(true)
     expect(body.data.status).toBe('ok')
+    expect(body.data.services.api).toBe('ok')
   })
 })
 
