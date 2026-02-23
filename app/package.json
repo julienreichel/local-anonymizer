@@ -10,7 +10,7 @@
     "generate": "nuxt generate",
     "lint": "nuxt typecheck",
     "typecheck": "nuxt typecheck",
-    "test": "echo \"No tests for app yet\""
+    "test": "vitest run"
   },
   "dependencies": {
     "@nuxt/ui": "^2.18.4",
@@ -21,6 +21,7 @@
   "devDependencies": {
     "@nuxt/devtools": "latest",
     "typescript": "^5.4.5",
+    "vitest": "^3.0.5",
     "vue-tsc": "^2.0.26"
   }
 }

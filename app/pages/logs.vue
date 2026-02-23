@@ -55,8 +55,8 @@ const columns = [
   { key: 'updated_at', label: 'Updated At' },
 ]
 
-function statusColor(status: string) {
-  const map: Record<string, string> = {
+function statusColor(status: string): 'green' | 'red' | 'blue' | 'purple' | 'yellow' | 'gray' {
+  const map: Record<string, 'green' | 'red' | 'blue' | 'purple' | 'yellow' | 'gray'> = {
     delivered: 'green',
     failed: 'red',
     processing: 'blue',
