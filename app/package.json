@@ -10,6 +10,7 @@
     "generate": "nuxt generate",
     "lint": "nuxt typecheck",
     "typecheck": "nuxt typecheck",
+    "pretest": "node scripts/prepare-test-config.mjs",
     "test": "vitest run"
   },
   "dependencies": {

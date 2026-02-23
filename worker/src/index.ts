@@ -2,10 +2,11 @@ import chokidar from 'chokidar'
 import path from 'node:path'
 import { POLL_INTERVAL_MS } from '@local-anonymizer/shared'
 import { processFile } from './processor.js'
+import { logger } from './logger.js'
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR ?? '/uploads'
 
-console.log(`[worker] Starting file watcher on: ${UPLOADS_DIR}`)
+logger.info('watcher_starting', { uploadsDir: UPLOADS_DIR })
 
 // Use polling as the primary cross-platform strategy.
 // chokidar falls back to native FS events where available (macOS FSEvents,
@@ -35,23 +36,23 @@ watcher.on('add', async (filePath: string) => {
   try {
     await processFile(filePath)
   } catch (err) {
-    console.error(`[worker] Unhandled error processing ${path.basename(filePath)}:`, err)
+    logger.error('unhandled_error', { errorMessage: (err as Error).message })
   } finally {
     inFlight.delete(filePath)
   }
 })
 
 watcher.on('error', (err: unknown) => {
-  console.error('[worker] Watcher error:', err)
+  logger.error('watcher_error', { errorMessage: (err as Error).message })
 })
 
 watcher.on('ready', () => {
-  console.log('[worker] Initial scan complete. Watching for new files...')
+  logger.info('watcher_ready', { uploadsDir: UPLOADS_DIR })
 })
 
 // Graceful shutdown
 function shutdown() {
-  console.log('[worker] Shutting down...')
+  logger.info('shutdown_initiated')
   watcher.close().then(() => process.exit(0))
 }
 
