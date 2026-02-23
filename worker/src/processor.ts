@@ -10,6 +10,7 @@ import {
   nowIso,
   type AnonymizationResult,
   type AnonymizedMessage,
+  type AnonymizationOperator,
 } from '@local-anonymizer/shared'
 
 const ANALYZER_URL = process.env.PRESIDIO_ANALYZER_URL ?? 'http://presidio-analyzer:5001'
@@ -18,6 +19,39 @@ const TARGET_URL = process.env.TARGET_URL ?? ''
 const TARGET_AUTH_HEADER = process.env.TARGET_AUTH_HEADER ?? ''
 const API_URL = process.env.API_URL ?? 'http://api:3001'
 const LANGUAGE = process.env.LANGUAGE ?? 'en'
+
+// ── Config helper ────────────────────────────────────────────────────────────
+
+interface WorkerConfig {
+  maxFileSizeBytes: number
+  deleteAfterSuccess: boolean
+  deleteAfterFailure: boolean
+  anonymizationOperator: AnonymizationOperator
+}
+
+async function getConfig(): Promise<WorkerConfig> {
+  try {
+    const res = await fetch(`${API_URL}/api/config`)
+    const json = (await res.json()) as {
+      ok: boolean
+      data: WorkerConfig
+    }
+    return {
+      maxFileSizeBytes: json.data.maxFileSizeBytes ?? MAX_FILE_SIZE_BYTES,
+      deleteAfterSuccess: json.data.deleteAfterSuccess ?? false,
+      deleteAfterFailure: json.data.deleteAfterFailure ?? false,
+      anonymizationOperator: json.data.anonymizationOperator ?? 'replace',
+    }
+  } catch {
+    // Fall back to safe defaults if the API is unavailable
+    return {
+      maxFileSizeBytes: MAX_FILE_SIZE_BYTES,
+      deleteAfterSuccess: false,
+      deleteAfterFailure: false,
+      anonymizationOperator: 'replace',
+    }
+  }
+}
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 
@@ -79,14 +113,28 @@ async function analyzeText(text: string): Promise<{ entity_type: string; start: 
   return res.json() as Promise<{ entity_type: string; start: number; end: number; score: number }[]>
 }
 
+/** Build the Presidio anonymizers map based on the configured operator. */
+function buildAnonymizers(operator: AnonymizationOperator): Record<string, unknown> {
+  switch (operator) {
+    case 'redact':
+      return { DEFAULT: { type: 'redact' } }
+    case 'hash':
+      return { DEFAULT: { type: 'hash', hash_type: 'sha256' } }
+    default: // 'replace' – replace each entity with its <ENTITY_TYPE> label
+      return { DEFAULT: { type: 'replace' } }
+  }
+}
+
 async function anonymizeText(
   text: string,
   analyzerResults: { entity_type: string; start: number; end: number; score: number }[],
+  operator: AnonymizationOperator,
 ): Promise<string> {
+  const anonymizers = buildAnonymizers(operator)
   const res = await fetch(`${ANONYMIZER_URL}/anonymize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, analyzer_results: analyzerResults }),
+    body: JSON.stringify({ text, analyzer_results: analyzerResults, anonymizers }),
     signal: AbortSignal.timeout(PRESIDIO_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`Anonymizer HTTP ${res.status}`)
@@ -124,6 +172,9 @@ export async function processFile(filePath: string): Promise<void> {
     return
   }
 
+  // Fetch runtime config from the API (falls back to safe defaults)
+  const config = await getConfig()
+
   let byteSize = 0
   try {
     const stat = await fs.stat(filePath)
@@ -133,7 +184,7 @@ export async function processFile(filePath: string): Promise<void> {
     return
   }
 
-  if (byteSize > MAX_FILE_SIZE_BYTES) {
+  if (byteSize > config.maxFileSizeBytes) {
     console.warn(`[worker] File too large (${byteSize} bytes), skipping: ${fileName}`)
     return
   }
@@ -145,11 +196,23 @@ export async function processFile(filePath: string): Promise<void> {
 
   const startMs = Date.now()
   let runId: string | null = null
+
+  // ── Step 1: Create run record as "queued" ──────────────────────────────
   try {
-    runId = await createRun(sourceFileName, byteSize, 'processing')
-    await appendLog(runId, 'anonymize_started', 'info')
+    runId = await createRun(sourceFileName, byteSize, 'queued')
+    await appendLog(runId, 'file_detected', 'info', { byteSize })
   } catch (e) {
     console.error('[worker] Could not create run entry:', (e as Error).message)
+  }
+
+  // ── Step 2: Begin processing ───────────────────────────────────────────
+  if (runId) {
+    try {
+      await updateRun(runId, { status: 'processing' })
+      await appendLog(runId, 'anonymize_started', 'info')
+    } catch (e) {
+      console.error('[worker] Could not update run to processing:', (e as Error).message)
+    }
   }
 
   let raw: string
@@ -159,6 +222,9 @@ export async function processFile(filePath: string): Promise<void> {
     if (runId) {
       await updateRun(runId, { status: 'failed', errorCode: 'READ_ERROR', errorMessageSafe: 'Could not read file' })
       await appendLog(runId, 'run_failed', 'error', { errorCode: 'READ_ERROR' })
+    }
+    if (config.deleteAfterFailure) {
+      await fs.unlink(filePath).catch(() => {})
     }
     return
   }
@@ -173,10 +239,13 @@ export async function processFile(filePath: string): Promise<void> {
       await updateRun(runId, { status: 'failed', errorCode: 'INVALID_SCHEMA', errorMessageSafe: 'Invalid schema' })
       await appendLog(runId, 'run_failed', 'error', { errorCode: 'INVALID_SCHEMA' })
     }
+    if (config.deleteAfterFailure) {
+      await fs.unlink(filePath).catch(() => {})
+    }
     return
   }
 
-  // Anonymize each message
+  // ── Step 3: Anonymize each message ─────────────────────────────────────
   const anonymizedMessages: AnonymizedMessage[] = []
   const presidioStats: Record<string, number> = {}
 
@@ -184,7 +253,7 @@ export async function processFile(filePath: string): Promise<void> {
     try {
       const analysisResults = await analyzeText(msg.content)
       const anonymizedContent = analysisResults.length > 0
-        ? await anonymizeText(msg.content, analysisResults)
+        ? await anonymizeText(msg.content, analysisResults, config.anonymizationOperator)
         : msg.content
       anonymizedMessages.push({
         id: msg.id,
@@ -201,6 +270,9 @@ export async function processFile(filePath: string): Promise<void> {
       if (runId) {
         await updateRun(runId, { status: 'failed', errorCode: 'PRESIDIO_ERROR', errorMessageSafe: `Presidio error: ${(e as Error).message}` })
         await appendLog(runId, 'run_failed', 'error', { errorCode: 'PRESIDIO_ERROR' })
+      }
+      if (config.deleteAfterFailure) {
+        await fs.unlink(filePath).catch(() => {})
       }
       return
     }
@@ -220,7 +292,10 @@ export async function processFile(filePath: string): Promise<void> {
     await appendLog(runId, 'anonymize_succeeded', 'info', { entityCount: Object.values(presidioStats).reduce((a, b) => a + b, 0) })
   }
 
-  // Deliver
+  // ── Step 4: Deliver ────────────────────────────────────────────────────
+  if (runId) {
+    await appendLog(runId, 'delivery_started', 'info')
+  }
   const deliveryStart = Date.now()
   try {
     const statusCode = await deliverPayload(result)
@@ -247,18 +322,24 @@ export async function processFile(filePath: string): Promise<void> {
       })
       await appendLog(runId, 'run_failed', 'error', { errorCode: 'DELIVERY_ERROR' })
     }
+    if (config.deleteAfterFailure) {
+      await fs.unlink(filePath).catch(() => {})
+    }
     return
   }
 
-  // Remove original file after successful delivery
-  try {
-    await fs.unlink(filePath)
-    if (runId) {
-      await updateRun(runId, { status: 'deleted' })
-      await appendLog(runId, 'cleanup_deleted', 'info')
+  // ── Step 5: Cleanup ────────────────────────────────────────────────────
+  if (config.deleteAfterSuccess) {
+    try {
+      await fs.unlink(filePath)
+      if (runId) {
+        await updateRun(runId, { status: 'deleted' })
+        await appendLog(runId, 'cleanup_deleted', 'info')
+      }
+      console.log(`[worker] Removed processed file hash=${fileNameHash}`)
+    } catch (e) {
+      console.warn(`[worker] Could not remove file hash=${fileNameHash}:`, (e as Error).message)
     }
-    console.log(`[worker] Removed processed file hash=${fileNameHash}`)
-  } catch (e) {
-    console.warn(`[worker] Could not remove file hash=${fileNameHash}:`, (e as Error).message)
   }
 }
+

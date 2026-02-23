@@ -41,6 +41,8 @@ export const AnonymizationResultSchema = z.object({
 // AppConfig (singleton – stored in DB as key/value)
 // ---------------------------------------------------------------------------
 
+export const AnonymizationOperatorSchema = z.enum(['replace', 'redact', 'hash'])
+
 export const AppConfigSchema = z.object({
   watchFolderPath: z.string().default('/uploads'),
   deleteAfterSuccess: z.boolean().default(false),
@@ -48,6 +50,7 @@ export const AppConfigSchema = z.object({
   maxFileSizeBytes: z.number().int().positive().default(10 * 1024 * 1024),
   acceptedExtensions: z.array(z.string()).default(['.json']),
   pollIntervalMs: z.number().int().positive().default(5000),
+  anonymizationOperator: AnonymizationOperatorSchema.default('replace'),
 })
 
 // ---------------------------------------------------------------------------
@@ -146,6 +149,7 @@ export type ChatMessage = z.infer<typeof ChatMessageSchema>
 export type ChatLog = z.infer<typeof ChatLogSchema>
 export type AnonymizedMessage = z.infer<typeof AnonymizedMessageSchema>
 export type AnonymizationResult = z.infer<typeof AnonymizationResultSchema>
+export type AnonymizationOperator = z.infer<typeof AnonymizationOperatorSchema>
 export type AppConfig = z.infer<typeof AppConfigSchema>
 export type DeliveryTargetAuth = z.infer<typeof DeliveryTargetAuthSchema>
 export type DeliveryTarget = z.infer<typeof DeliveryTargetSchema>
