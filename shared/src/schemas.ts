@@ -18,7 +18,7 @@ export const ChatLogSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
-// Anonymization result
+// Anonymization result (in-memory / delivery payload – never stored raw)
 // ---------------------------------------------------------------------------
 
 export const AnonymizedMessageSchema = z.object({
@@ -38,53 +38,105 @@ export const AnonymizationResultSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
-// Processing log entry (stored in DB – no raw PII)
+// AppConfig (singleton – stored in DB as key/value)
 // ---------------------------------------------------------------------------
 
-export const ProcessingStatusSchema = z.enum([
-  'pending',
+export const AppConfigSchema = z.object({
+  watchFolderPath: z.string().default('/uploads'),
+  deleteAfterSuccess: z.boolean().default(false),
+  deleteAfterFailure: z.boolean().default(false),
+  maxFileSizeBytes: z.number().int().positive().default(10 * 1024 * 1024),
+  acceptedExtensions: z.array(z.string()).default(['.json']),
+  pollIntervalMs: z.number().int().positive().default(5000),
+})
+
+// ---------------------------------------------------------------------------
+// DeliveryTarget
+// ---------------------------------------------------------------------------
+
+export const DeliveryTargetAuthSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('none') }),
+  z.object({ type: z.literal('bearerToken'), token: z.string() }),
+  z.object({ type: z.literal('apiKeyHeader'), header: z.string(), key: z.string() }),
+  z.object({ type: z.literal('basic'), username: z.string(), password: z.string() }),
+])
+
+export const DeliveryTargetSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1),
+  url: z.string().url(),
+  method: z.enum(['GET', 'POST']).default('POST'),
+  headers: z.record(z.string()).default({}),
+  auth: DeliveryTargetAuthSchema.default({ type: 'none' }),
+  timeoutMs: z.number().int().positive().default(15000),
+  retries: z.number().int().nonnegative().default(0),
+  backoffMs: z.number().int().nonnegative().default(1000),
+  enabled: z.boolean().default(true),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+})
+
+// ---------------------------------------------------------------------------
+// ProcessingRun (stored in DB – no raw PII)
+// ---------------------------------------------------------------------------
+
+export const ProcessingRunStatusSchema = z.enum([
+  'queued',
   'processing',
   'anonymized',
   'delivered',
   'failed',
+  'deleted',
 ])
 
-export const LogEntrySchema = z.object({
+export const ProcessingRunSchema = z.object({
   id: z.string().uuid(),
-  file_name_hash: z.string(), // SHA-256 of original filename
-  byte_size: z.number().int().nonnegative(),
-  status: ProcessingStatusSchema,
-  error_message: z.string().optional(),
-  created_at: z.string().datetime(),
-  updated_at: z.string().datetime(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  sourceType: z.literal('folderUpload'),
+  sourceFileName: z.string(), // sanitized name + hash – no raw path
+  sourceFileSize: z.number().int().nonnegative(),
+  status: ProcessingRunStatusSchema,
+  errorCode: z.string().optional(),
+  errorMessageSafe: z.string().optional(),
+  presidioStats: z.record(z.number().int().nonnegative()).optional(),
+  deliveryStatusCode: z.number().int().optional(),
+  deliveryDurationMs: z.number().int().nonnegative().optional(),
+  durationMs: z.number().int().nonnegative().optional(),
 })
 
 // ---------------------------------------------------------------------------
-// App configuration (stored in DB / env)
+// AuditLogEvent (append-only – no payload content)
 // ---------------------------------------------------------------------------
 
-export const AppConfigSchema = z.object({
-  target_url: z.string().url(),
-  target_auth_header: z.string().optional(), // e.g. "Bearer <token>"
-  presidio_analyzer_url: z.string().url().default('http://presidio-analyzer:5001'),
-  presidio_anonymizer_url: z.string().url().default('http://presidio-anonymizer:5002'),
-  language: z.string().default('en'),
+export const AuditLogEventLevelSchema = z.enum(['info', 'warn', 'error'])
+
+export const AuditLogEventTypeSchema = z.enum([
+  'file_detected',
+  'anonymize_started',
+  'anonymize_succeeded',
+  'delivery_started',
+  'delivery_succeeded',
+  'cleanup_deleted',
+  'run_failed',
+])
+
+export const AuditLogEventSchema = z.object({
+  id: z.string().uuid(),
+  timestamp: z.string().datetime(),
+  level: AuditLogEventLevelSchema,
+  runId: z.string().uuid().optional(),
+  eventType: AuditLogEventTypeSchema,
+  meta: z.record(z.unknown()).optional(), // safe metadata – no payload content
 })
 
 // ---------------------------------------------------------------------------
-// API response wrappers
+// API response envelope
 // ---------------------------------------------------------------------------
 
-export const ApiSuccessSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
-  z.object({
-    success: z.literal(true),
-    data: dataSchema,
-  })
-
-export const ApiErrorSchema = z.object({
-  success: z.literal(false),
-  error: z.string(),
-})
+export const okResponse = <T>(data: T) => ({ ok: true as const, data })
+export const errResponse = (code: string, message: string) =>
+  ({ ok: false as const, error: { code, message } }) as const
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,6 +146,11 @@ export type ChatMessage = z.infer<typeof ChatMessageSchema>
 export type ChatLog = z.infer<typeof ChatLogSchema>
 export type AnonymizedMessage = z.infer<typeof AnonymizedMessageSchema>
 export type AnonymizationResult = z.infer<typeof AnonymizationResultSchema>
-export type ProcessingStatus = z.infer<typeof ProcessingStatusSchema>
-export type LogEntry = z.infer<typeof LogEntrySchema>
 export type AppConfig = z.infer<typeof AppConfigSchema>
+export type DeliveryTargetAuth = z.infer<typeof DeliveryTargetAuthSchema>
+export type DeliveryTarget = z.infer<typeof DeliveryTargetSchema>
+export type ProcessingRunStatus = z.infer<typeof ProcessingRunStatusSchema>
+export type ProcessingRun = z.infer<typeof ProcessingRunSchema>
+export type AuditLogEventLevel = z.infer<typeof AuditLogEventLevelSchema>
+export type AuditLogEventType = z.infer<typeof AuditLogEventTypeSchema>
+export type AuditLogEvent = z.infer<typeof AuditLogEventSchema>

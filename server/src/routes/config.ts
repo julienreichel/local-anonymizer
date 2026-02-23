@@ -1,21 +1,34 @@
 import { FastifyInstance } from 'fastify'
 import { getDb } from '../db.js'
-import { AppConfigSchema } from '@local-anonymizer/shared'
+import { AppConfigSchema, okResponse, errResponse } from '@local-anonymizer/shared'
 import { z } from 'zod'
+
+// Default config values (applied when key is missing from DB)
+const DEFAULT_CONFIG = AppConfigSchema.parse({})
+
+/** Read config rows from DB and merge with defaults. */
+function readConfig(db: ReturnType<typeof getDb>): z.infer<typeof AppConfigSchema> {
+  const rows = db.prepare('SELECT key, value FROM app_config').all() as {
+    key: string
+    value: string
+  }[]
+  const stored: Record<string, unknown> = {}
+  for (const row of rows) {
+    try {
+      stored[row.key] = JSON.parse(row.value)
+    } catch {
+      console.warn(`[config] Could not parse config key "${row.key}" as JSON, using raw string`)
+      stored[row.key] = row.value
+    }
+  }
+  return AppConfigSchema.parse({ ...DEFAULT_CONFIG, ...stored })
+}
 
 export async function configRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/config – retrieve current config
   app.get('/api/config', async (_req, reply) => {
     const db = getDb()
-    const rows = db.prepare('SELECT key, value FROM app_config').all() as {
-      key: string
-      value: string
-    }[]
-    const config: Record<string, string> = {}
-    for (const row of rows) {
-      config[row.key] = row.value
-    }
-    return reply.send({ success: true, data: config })
+    return reply.send(okResponse(readConfig(db)))
   })
 
   // PUT /api/config – update config (partial update supported)
@@ -24,7 +37,9 @@ export async function configRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const parsed = AppConfigSchema.partial().safeParse(req.body)
       if (!parsed.success) {
-        return reply.status(400).send({ success: false, error: parsed.error.message })
+        return reply
+          .status(400)
+          .send(errResponse('VALIDATION_ERROR', parsed.error.message))
       }
       const db = getDb()
       const upsert = db.prepare(
@@ -36,10 +51,10 @@ export async function configRoutes(app: FastifyInstance): Promise<void> {
         }
       })
       const entries = Object.entries(parsed.data).map(
-        ([k, v]) => [k, String(v)] as [string, string],
+        ([k, v]) => [k, JSON.stringify(v)] as [string, string],
       )
       upsertMany(entries)
-      return reply.send({ success: true, data: null })
+      return reply.send(okResponse(readConfig(db)))
     },
   )
 }
