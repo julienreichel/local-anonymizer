@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.nuxt
+**/.nuxt
+.output
+**/.output
+*.log
+.env
+.env.local
+infra/volumes/data/*
+infra/volumes/uploads/*
+!infra/volumes/uploads/.gitkeep
+!infra/volumes/data/.gitkeep
+*.tsbuildinfo

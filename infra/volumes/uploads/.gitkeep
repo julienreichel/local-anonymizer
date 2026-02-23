@@ -1,0 +1,2 @@
+# This directory is mounted into the worker container as /uploads.
+# Drop JSON chat log files here – they will be processed automatically.
