@@ -4,7 +4,6 @@ import {
   ChatLogSchema,
   ACCEPTED_EXTENSIONS,
   MAX_FILE_SIZE_BYTES,
-  PRESIDIO_TIMEOUT_MS,
   DELIVERY_TIMEOUT_MS,
   hashString,
   nowIso,
@@ -12,9 +11,12 @@ import {
   type AnonymizedMessage,
   type AnonymizationOperator,
 } from '@local-anonymizer/shared'
+import { PresidioClient, type PresidioOperatorsMap } from './presidio-client.js'
 
 const ANALYZER_URL = process.env.PRESIDIO_ANALYZER_URL ?? 'http://presidio-analyzer:5001'
 const ANONYMIZER_URL = process.env.PRESIDIO_ANONYMIZER_URL ?? 'http://presidio-anonymizer:5002'
+
+const presidio = new PresidioClient(ANALYZER_URL, ANONYMIZER_URL)
 const TARGET_URL = process.env.TARGET_URL ?? ''
 const TARGET_AUTH_HEADER = process.env.TARGET_AUTH_HEADER ?? ''
 const API_URL = process.env.API_URL ?? 'http://api:3001'
@@ -102,19 +104,8 @@ async function appendLog(
 
 // ── Presidio helpers ────────────────────────────────────────────────────────
 
-async function analyzeText(text: string): Promise<{ entity_type: string; start: number; end: number; score: number }[]> {
-  const res = await fetch(`${ANALYZER_URL}/analyze`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, language: LANGUAGE }),
-    signal: AbortSignal.timeout(PRESIDIO_TIMEOUT_MS),
-  })
-  if (!res.ok) throw new Error(`Analyzer HTTP ${res.status}`)
-  return res.json() as Promise<{ entity_type: string; start: number; end: number; score: number }[]>
-}
-
 /** Build the Presidio anonymizers map based on the configured operator. */
-function buildAnonymizers(operator: AnonymizationOperator): Record<string, unknown> {
+function buildAnonymizers(operator: AnonymizationOperator): PresidioOperatorsMap {
   switch (operator) {
     case 'redact':
       return { DEFAULT: { type: 'redact' } }
@@ -123,23 +114,6 @@ function buildAnonymizers(operator: AnonymizationOperator): Record<string, unkno
     default: // 'replace' – replace each entity with its <ENTITY_TYPE> label
       return { DEFAULT: { type: 'replace' } }
   }
-}
-
-async function anonymizeText(
-  text: string,
-  analyzerResults: { entity_type: string; start: number; end: number; score: number }[],
-  operator: AnonymizationOperator,
-): Promise<string> {
-  const anonymizers = buildAnonymizers(operator)
-  const res = await fetch(`${ANONYMIZER_URL}/anonymize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, analyzer_results: analyzerResults, anonymizers }),
-    signal: AbortSignal.timeout(PRESIDIO_TIMEOUT_MS),
-  })
-  if (!res.ok) throw new Error(`Anonymizer HTTP ${res.status}`)
-  const json = (await res.json()) as { text: string }
-  return json.text
 }
 
 // ── Delivery helper ─────────────────────────────────────────────────────────
@@ -251,9 +225,9 @@ export async function processFile(filePath: string): Promise<void> {
 
   for (const msg of chatLog.messages) {
     try {
-      const analysisResults = await analyzeText(msg.content)
+      const analysisResults = await presidio.analyze(msg.content, LANGUAGE)
       const anonymizedContent = analysisResults.length > 0
-        ? await anonymizeText(msg.content, analysisResults, config.anonymizationOperator)
+        ? await presidio.anonymize(msg.content, analysisResults, buildAnonymizers(config.anonymizationOperator))
         : msg.content
       anonymizedMessages.push({
         id: msg.id,
