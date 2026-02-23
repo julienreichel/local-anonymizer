@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "messages": "this-should-be-an-array",
+  "metadata": {
+    "source": "fixture-invalid"
+  }
+}

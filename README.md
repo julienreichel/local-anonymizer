@@ -6,6 +6,141 @@ Everything runs in Docker containers – no Python, Rust, or native dependencies
 
 ---
 
+## Quick-start
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS) or Docker Engine + Compose plugin (Linux)
+- No other tools required on the host
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/julienreichel/local-anonymizer.git
+cd local-anonymizer
+
+# Copy the example environment file
+cp .env.example .env
+```
+
+Open `.env` and set, at minimum:
+
+```dotenv
+# Absolute or relative path to the watched folder
+UPLOADS_DIR=./infra/volumes/uploads
+
+# Where the anonymized payload should be delivered
+TARGET_URL=https://your-ingest-endpoint.example.com/ingest
+
+# Optional Bearer token for the delivery endpoint
+TARGET_AUTH_HEADER=Bearer eyJhb...
+```
+
+### 2. Start all services
+
+```bash
+docker compose up --build
+```
+
+> **First run** downloads the Presidio images (~1 GB) and builds the three custom images. Subsequent runs are much faster.
+
+### 3. Open the dashboard
+
+```
+http://localhost:3000
+```
+
+From the dashboard you can:
+
+- Monitor total / delivered / failed / pending runs
+- Browse audit logs (file hash, size, status – **no PII stored**)
+- Configure delivery targets and anonymization settings
+
+### 4. Drop a test file
+
+Copy the provided fixture into the uploads folder and watch it get processed:
+
+```bash
+cp fixtures/chat-valid.json infra/volumes/uploads/
+```
+
+The worker picks it up within 5 seconds, anonymizes every message, posts to `TARGET_URL`, and records the result in the dashboard.
+
+---
+
+## Configuration flow
+
+All runtime settings are managed through the REST API and persisted in SQLite. The worker fetches config at startup and before each file is processed.
+
+### Environment variables (`.env`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `UPLOADS_DIR` | `./infra/volumes/uploads` | Host path bind-mounted into the worker |
+| `TARGET_URL` | _(empty)_ | Delivery endpoint; if empty, delivery is skipped |
+| `TARGET_AUTH_HEADER` | _(empty)_ | Full `Authorization` header value (e.g. `Bearer <token>`) |
+| `LANGUAGE` | `en` | BCP-47 language code passed to Presidio |
+| `DATA_DIR` | `./infra/volumes/data` | Host path for SQLite database persistence |
+| `API_PORT` | `3001` | Exposed port for the REST API |
+| `UI_PORT` | `3000` | Exposed port for the web UI |
+
+### API-configurable settings (`PUT /api/config`)
+
+| Field | Default | Description |
+|---|---|---|
+| `watchFolderPath` | `/uploads` | Path inside the worker container |
+| `deleteAfterSuccess` | `false` | Delete the source file after successful delivery |
+| `deleteAfterFailure` | `false` | Delete the source file when processing fails |
+| `maxFileSizeBytes` | `10485760` (10 MB) | Reject files larger than this |
+| `acceptedExtensions` | `[".json"]` | File extensions processed by the worker |
+| `pollIntervalMs` | `5000` | chokidar polling interval (ms) |
+| `anonymizationOperator` | `"replace"` | PII replacement strategy: `replace`, `redact`, or `hash` |
+
+---
+
+## Supported chat log format
+
+The worker accepts JSON files matching this schema:
+
+```json
+{
+  "version": "1.0",
+  "messages": [
+    {
+      "id": "string (required)",
+      "role": "user | assistant | system (required)",
+      "content": "string (required)",
+      "timestamp": "ISO-8601 datetime (optional)"
+    }
+  ],
+  "metadata": { "any": "key-value pairs (optional)" }
+}
+```
+
+See `fixtures/chat-valid.json` for a working example with PII and `fixtures/chat-invalid.json` for a schema-invalid example used in automated tests.
+
+### Anonymization operators
+
+| Operator | Example input | Example output |
+|---|---|---|
+| `replace` (default) | `john@example.com` | `<EMAIL_ADDRESS>` |
+| `redact` | `john@example.com` | _(empty string)_ |
+| `hash` | `john@example.com` | `8d969eef...` (SHA-256) |
+
+---
+
+## How to add new sources or triggers
+
+The current worker polls a folder (`chokidar`). To add a new trigger:
+
+1. **Create a trigger module** in `worker/src/` (e.g. `webhook-trigger.ts`) that calls `processFile(filePath)` after writing the received payload to a temp file.
+2. **Register the trigger** in `worker/src/index.ts` alongside the existing watcher.
+3. **Add a new `sourceType`** value to `ProcessingRunSchema` in `shared/src/schemas.ts` if the new source needs a distinct label in the dashboard.
+
+No changes to the API or worker pipeline are required – `processFile` is the single entry point for all sources.
+
+---
+
 ## Architecture
 
 ```
@@ -48,22 +183,26 @@ Everything runs in Docker containers – no Python, Rust, or native dependencies
 ```
 local-anonymizer/
 ├── app/                   # Nuxt 3 + Nuxt UI frontend
+│   ├── composables/
+│   │   └── useApi.ts      # Typed API client + Zod schemas
 │   ├── pages/
-│   ├── nuxt.config.ts
 │   └── Dockerfile
 ├── server/                # Fastify API + SQLite
 │   ├── src/
-│   │   ├── index.ts
-│   │   ├── db.ts
-│   │   └── routes/
+│   │   ├── db.ts          # SQLite schema + migration
+│   │   └── routes/        # config, targets, runs, logs, health
 │   └── Dockerfile
 ├── worker/                # File watcher + processing pipeline
 │   ├── src/
 │   │   ├── index.ts       # chokidar watcher (cross-platform)
+│   │   ├── logger.ts      # Structured JSON logger (no PII)
 │   │   └── processor.ts   # Presidio pipeline + delivery
 │   └── Dockerfile
 ├── shared/                # Zod schemas, types, constants, utilities
 │   └── src/
+├── fixtures/
+│   ├── chat-valid.json    # Valid chat log with PII for testing
+│   └── chat-invalid.json  # Invalid chat log (wrong schema) for testing
 ├── infra/
 │   ├── volumes/
 │   │   ├── uploads/       # Bind-mounted into worker container
@@ -72,79 +211,9 @@ local-anonymizer/
 │       └── reset-volumes.sh
 ├── docker-compose.yml
 ├── .env.example
+├── SECURITY.md            # No-PII logging policy + threat model
 └── pnpm-workspace.yaml
 ```
-
----
-
-## First-run guide
-
-### Prerequisites
-
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS) or Docker Engine + Compose plugin (Linux)
-- No other tools required on the host
-
-### 1. Clone and configure
-
-```bash
-git clone https://github.com/julienreichel/local-anonymizer.git
-cd local-anonymizer
-
-# Copy the example environment file and edit as needed
-cp .env.example .env
-```
-
-Open `.env` in your editor and set at minimum:
-
-```dotenv
-# Where the worker watches for new JSON files (absolute or relative path)
-UPLOADS_DIR=./infra/volumes/uploads
-
-# Where processed files land after anonymization (optional – leave blank to skip)
-TARGET_URL=https://your-ingest-endpoint.example.com/ingest
-
-# Optional Bearer token for the delivery endpoint
-TARGET_AUTH_HEADER=Bearer eyJhb...
-```
-
-### 2. Start all services
-
-```bash
-docker compose up --build
-```
-
-> **First run** downloads the Presidio images (~1 GB) and builds the three custom images. Subsequent runs are much faster.
-
-### 3. Open the UI
-
-Once all services are healthy, open your browser to:
-
-```
-http://localhost:3000
-```
-
-From the dashboard you can:
-- View processing statistics (total / delivered / failed / pending)
-- Browse processing logs (file hash, size, status – no PII stored)
-- Update the target URL and authentication header
-
-### 4. Drop a file to test
-
-Copy a JSON chat log into the uploads folder:
-
-```bash
-# Example chat log
-cat > infra/volumes/uploads/test.json <<'EOF'
-{
-  "messages": [
-    { "id": "1", "role": "user",      "content": "Hi, my name is John Smith and my email is john@example.com." },
-    { "id": "2", "role": "assistant", "content": "Hello! How can I help you today?" }
-  ]
-}
-EOF
-```
-
-The worker will pick it up within 5 seconds, anonymize it, post it to `TARGET_URL` (if configured), log the result, and delete the original file.
 
 ---
 
@@ -172,6 +241,24 @@ pnpm install
 | `pnpm docker:up` | `docker compose up --build` |
 | `pnpm docker:down` | `docker compose down` |
 
+### Running tests
+
+```bash
+# All tests (shared echo, server vitest, worker vitest, app vitest)
+pnpm test
+
+# Individual packages
+pnpm --filter @local-anonymizer/server test
+pnpm --filter @local-anonymizer/worker test
+pnpm --filter @local-anonymizer/app     test
+```
+
+Test categories:
+
+- **Unit tests** – schema validation (`shared`), `PresidioClient` (mocked fetch), `processFile` pipeline (mocked fs + fetch)
+- **Integration tests** – API endpoints with an in-memory SQLite database (`server`)
+- **PII leakage guard** – verifies that fixture PII (`john.smith@example.com`, `+1-555-123-4567`) never appears in stored DB columns or API responses (`server/src/test/pii-guard.test.ts`, `worker/src/test/pii-guard.test.ts`)
+
 ### Reset local data
 
 ```bash
@@ -180,31 +267,45 @@ pnpm install
 
 ---
 
-## Chat log format
+## Troubleshooting
 
-The worker accepts JSON files matching this schema:
+### Worker does not pick up files
 
-```json
-{
-  "messages": [
-    {
-      "id": "string (required)",
-      "role": "user | assistant | system (required)",
-      "content": "string (required)",
-      "timestamp": "ISO-8601 (optional)"
-    }
-  ],
-  "version": "string (optional)",
-  "metadata": { "...": "any (optional)" }
-}
+- **Permissions**: Ensure the host `UPLOADS_DIR` is readable by the Docker user. On Linux, run `chmod 777 infra/volumes/uploads` if needed.
+- **Windows path mapping**: Use Unix-style paths in `.env` (e.g. `UPLOADS_DIR=./infra/volumes/uploads`) – Docker Desktop translates these automatically.
+- **Polling**: The worker uses `chokidar` in polling mode (`usePolling: true`) so it works on network drives and Windows NTFS. If you increased `pollIntervalMs`, files won't be detected until the next poll tick.
+
+### Presidio container not healthy
+
+```bash
+# Check health status
+docker compose ps
+
+# View Presidio logs
+docker compose logs presidio-analyzer
+docker compose logs presidio-anonymizer
+```
+
+The analyzer downloads spaCy language models on first start, which can take 1–2 minutes. Wait for `healthy` status before dropping files.
+
+### SQLite database issues
+
+```bash
+# Reset all local data (stops containers, clears volumes)
+./infra/scripts/reset-volumes.sh
+
+# Restart
+docker compose up --build
 ```
 
 ---
 
 ## Privacy guarantees
 
-- **No PII in logs**: only the SHA-256 hash of the original filename, the byte size, and processing status are stored in the database.
-- **Original files deleted** after successful delivery.
+See [SECURITY.md](./SECURITY.md) for the full no-PII logging policy and threat model.
+
+- **No PII in logs**: only the SHA-256 hash of the original filename, byte size, and processing status are stored in the database.
+- **Anonymized delivery only**: the payload sent to `TARGET_URL` contains Presidio-anonymized messages – raw content is never delivered.
 - **No telemetry**: nothing is sent to external services except the configured `TARGET_URL`.
 
 ---

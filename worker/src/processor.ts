@@ -12,6 +12,7 @@ import {
   type AnonymizationOperator,
 } from '@local-anonymizer/shared'
 import { PresidioClient, type PresidioOperatorsMap } from './presidio-client.js'
+import { logger } from './logger.js'
 
 const ANALYZER_URL = process.env.PRESIDIO_ANALYZER_URL ?? 'http://presidio-analyzer:5001'
 const ANONYMIZER_URL = process.env.PRESIDIO_ANONYMIZER_URL ?? 'http://presidio-anonymizer:5002'
@@ -120,7 +121,7 @@ function buildAnonymizers(operator: AnonymizationOperator): PresidioOperatorsMap
 
 async function deliverPayload(payload: AnonymizationResult): Promise<number | null> {
   if (!TARGET_URL) {
-    console.warn('[worker] TARGET_URL not set – skipping delivery')
+    logger.warn('delivery_skipped', { reason: 'TARGET_URL_not_set' })
     return null
   }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -142,7 +143,7 @@ export async function processFile(filePath: string): Promise<void> {
   const ext = path.extname(fileName).toLowerCase()
 
   if (!ACCEPTED_EXTENSIONS.includes(ext as '.json')) {
-    console.log(`[worker] Skipping non-JSON file: ${fileName}`)
+    logger.info('file_skipped', { reason: 'non_json_extension' })
     return
   }
 
@@ -159,14 +160,14 @@ export async function processFile(filePath: string): Promise<void> {
   }
 
   if (byteSize > config.maxFileSizeBytes) {
-    console.warn(`[worker] File too large (${byteSize} bytes), skipping: ${fileName}`)
+    logger.warn('file_skipped', { reason: 'file_too_large', byteSize, maxFileSizeBytes: config.maxFileSizeBytes })
     return
   }
 
   // Store only a sanitized reference: hash of filename – no raw path or content
   const fileNameHash = hashString(fileName)
   const sourceFileName = `sha256:${fileNameHash}`
-  console.log(`[worker] Processing file hash=${fileNameHash} size=${byteSize}`)
+  logger.info('file_detected', { fileHash: fileNameHash, byteSize })
 
   const startMs = Date.now()
   let runId: string | null = null
@@ -176,7 +177,7 @@ export async function processFile(filePath: string): Promise<void> {
     runId = await createRun(sourceFileName, byteSize, 'queued')
     await appendLog(runId, 'file_detected', 'info', { byteSize })
   } catch (e) {
-    console.error('[worker] Could not create run entry:', (e as Error).message)
+    logger.error('run_create_failed', { errorMessage: (e as Error).message })
   }
 
   // ── Step 2: Begin processing ───────────────────────────────────────────
@@ -185,7 +186,7 @@ export async function processFile(filePath: string): Promise<void> {
       await updateRun(runId, { status: 'processing' })
       await appendLog(runId, 'anonymize_started', 'info')
     } catch (e) {
-      console.error('[worker] Could not update run to processing:', (e as Error).message)
+      logger.error('run_status_update_failed', { runId: runId ?? undefined, errorMessage: (e as Error).message })
     }
   }
 
@@ -208,7 +209,7 @@ export async function processFile(filePath: string): Promise<void> {
   try {
     chatLog = ChatLogSchema.parse(JSON.parse(raw))
   } catch (e) {
-    console.error(`[worker] Invalid chat log schema hash=${fileNameHash}:`, (e as Error).message)
+    logger.error('schema_validation_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorCode: 'INVALID_SCHEMA' })
     if (runId) {
       await updateRun(runId, { status: 'failed', errorCode: 'INVALID_SCHEMA', errorMessageSafe: 'Invalid schema' })
       await appendLog(runId, 'run_failed', 'error', { errorCode: 'INVALID_SCHEMA' })
@@ -240,7 +241,7 @@ export async function processFile(filePath: string): Promise<void> {
         presidioStats[r.entity_type] = (presidioStats[r.entity_type] ?? 0) + 1
       }
     } catch (e) {
-      console.error(`[worker] Presidio error for message ${msg.id}:`, (e as Error).message)
+      logger.error('presidio_error', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
       if (runId) {
         await updateRun(runId, { status: 'failed', errorCode: 'PRESIDIO_ERROR', errorMessageSafe: `Presidio error: ${(e as Error).message}` })
         await appendLog(runId, 'run_failed', 'error', { errorCode: 'PRESIDIO_ERROR' })
@@ -283,9 +284,9 @@ export async function processFile(filePath: string): Promise<void> {
       })
       await appendLog(runId, 'delivery_succeeded', 'info', { statusCode, deliveryDurationMs })
     }
-    console.log(`[worker] Delivered hash=${fileNameHash}`)
+    logger.info('delivery_succeeded', { runId: runId ?? undefined, fileHash: fileNameHash, deliveryDurationMs, statusCode: statusCode ?? undefined })
   } catch (e) {
-    console.error(`[worker] Delivery failed hash=${fileNameHash}:`, (e as Error).message)
+    logger.error('delivery_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
     if (runId) {
       await updateRun(runId, {
         status: 'failed',
@@ -310,9 +311,9 @@ export async function processFile(filePath: string): Promise<void> {
         await updateRun(runId, { status: 'deleted' })
         await appendLog(runId, 'cleanup_deleted', 'info')
       }
-      console.log(`[worker] Removed processed file hash=${fileNameHash}`)
+      logger.info('cleanup_deleted', { runId: runId ?? undefined, fileHash: fileNameHash })
     } catch (e) {
-      console.warn(`[worker] Could not remove file hash=${fileNameHash}:`, (e as Error).message)
+      logger.warn('cleanup_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
     }
   }
 }

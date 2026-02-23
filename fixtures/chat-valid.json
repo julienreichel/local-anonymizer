@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "messages": [
+    {
+      "id": "msg-1",
+      "role": "user",
+      "content": "Hi, my name is John Smith. You can reach me at john.smith@example.com or call +1-555-123-4567.",
+      "timestamp": "2024-01-15T09:00:00.000Z"
+    },
+    {
+      "id": "msg-2",
+      "role": "assistant",
+      "content": "Hello! How can I help you today?",
+      "timestamp": "2024-01-15T09:00:05.000Z"
+    },
+    {
+      "id": "msg-3",
+      "role": "user",
+      "content": "I need to reset my account. My email is john.smith@example.com and my SSN is 123-45-6789.",
+      "timestamp": "2024-01-15T09:00:15.000Z"
+    },
+    {
+      "id": "msg-4",
+      "role": "assistant",
+      "content": "I can help with that. For security, please confirm the last four digits of your phone number.",
+      "timestamp": "2024-01-15T09:00:20.000Z"
+    }
+  ],
+  "metadata": {
+    "sessionId": "test-session-abc123",
+    "source": "fixture"
+  }
+}
