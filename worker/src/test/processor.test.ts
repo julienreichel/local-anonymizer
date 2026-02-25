@@ -47,14 +47,14 @@ function callBody(call: unknown[]): Record<string, unknown> {
 
 /**
  * Wire up fetch to handle the standard happy-path sequence:
- *   1. GET /api/config   → default config
- *   2. POST /api/runs    → { id: 'run-1' }
+ *   1. GET /api/config    → default config
+ *   2. POST /api/runs     → { id: 'run-1' }
  *   3. PATCH /api/runs/:id (queued→processing)
- *   4. POST /api/logs    (any number of times)
- *   5. POST /analyze     → []   (no PII)
+ *   4. POST /api/logs     (any number of times)
+ *   5. POST /analyze      → []   (no PII)
  *   6. PATCH /api/runs/:id (anonymized)
- *   7. POST /api/logs    (anonymize_succeeded)
- *   8. POST /api/logs    (delivery_started)  – TARGET_URL empty → skip delivery
+ *   7. GET /api/targets   → []   (no DB targets → falls back to TARGET_URL)
+ *   8. POST /api/logs     (delivery_started)  – TARGET_URL empty → skip delivery
  */
 function setupHappyPathFetch() {
   fetchMock.mockImplementation((url: string, opts?: RequestInit) => {
@@ -70,6 +70,9 @@ function setupHappyPathFetch() {
           anonymizationOperator: 'replace',
         },
       }))
+    }
+    if (method === 'GET' && url.includes('/api/targets')) {
+      return Promise.resolve(fakeResponse({ ok: true, data: [] }))
     }
     if (method === 'POST' && url.includes('/api/runs') && !url.includes('/api/runs/')) {
       return Promise.resolve(fakeResponse({ ok: true, data: { id: 'run-1' } }, true, 201))
@@ -217,6 +220,9 @@ describe('processFile', () => {
           data: { maxFileSizeBytes: 10 * 1024 * 1024, deleteAfterSuccess: true, deleteAfterFailure: false, anonymizationOperator: 'replace' },
         }))
       }
+      if (method === 'GET' && url.includes('/api/targets')) {
+        return Promise.resolve(fakeResponse({ ok: true, data: [] }))
+      }
       if (method === 'POST' && url.includes('/api/runs') && !url.includes('/api/runs/')) {
         return Promise.resolve(fakeResponse({ ok: true, data: { id: 'run-1' } }, true, 201))
       }
@@ -250,6 +256,9 @@ describe('processFile', () => {
           ok: true,
           data: { maxFileSizeBytes: 10 * 1024 * 1024, deleteAfterSuccess: false, deleteAfterFailure: false, anonymizationOperator: 'replace' },
         }))
+      }
+      if (method === 'GET' && url.includes('/api/targets')) {
+        return Promise.resolve(fakeResponse({ ok: true, data: [] }))
       }
       if (method === 'POST' && url.includes('/api/runs') && !url.includes('/api/runs/')) {
         return Promise.resolve(fakeResponse({ ok: true, data: { id: 'run-1' } }, true, 201))
@@ -290,6 +299,9 @@ describe('processFile', () => {
           ok: true,
           data: { maxFileSizeBytes: 10 * 1024 * 1024, deleteAfterSuccess: false, deleteAfterFailure: false, anonymizationOperator: 'redact' },
         }))
+      }
+      if (method === 'GET' && url.includes('/api/targets')) {
+        return Promise.resolve(fakeResponse({ ok: true, data: [] }))
       }
       if (method === 'POST' && url.includes('/api/runs') && !url.includes('/api/runs/')) {
         return Promise.resolve(fakeResponse({ ok: true, data: { id: 'run-1' } }, true, 201))
@@ -371,9 +383,9 @@ describe('processFile', () => {
   })
 })
 
-// ── Analysis service tests ────────────────────────────────────────────────
+// ── Delivery target tests ────────────────────────────────────────────────────
 
-describe('analysis service integration', () => {
+describe('delivery targets', () => {
   let fsMod: { stat: ReturnType<typeof vi.fn>; readFile: ReturnType<typeof vi.fn>; unlink: ReturnType<typeof vi.fn> }
 
   beforeEach(async () => {
@@ -383,34 +395,38 @@ describe('analysis service integration', () => {
     fsMod = fsImport.default as unknown as typeof fsMod
   })
 
-  /** Wire up fetch with analysis service enabled in config */
-  function setupAnalysisFetch(opts: {
-    sentimentEnabled?: boolean
-    toxicityEnabled?: boolean
-    analysisOk?: boolean
-  } = {}) {
-    const { sentimentEnabled = true, toxicityEnabled = true, analysisOk = true } = opts
-    fetchMock.mockImplementation((url: string, fetchOpts?: RequestInit) => {
-      const method = fetchOpts?.method ?? 'GET'
+  /** Build a minimal enabled delivery target */
+  function makeTarget(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'target-1',
+      name: 'Test Target',
+      url: 'https://external.example.com/webhook',
+      method: 'POST',
+      headers: {},
+      auth: { type: 'none' },
+      timeoutMs: 15000,
+      retries: 0,
+      backoffMs: 1000,
+      enabled: true,
+      createdAt: '2025-01-01T00:00:00.000Z',
+      updatedAt: '2025-01-01T00:00:00.000Z',
+      ...overrides,
+    }
+  }
+
+  /** Wire up fetch with DB delivery targets configured */
+  function setupTargetFetch(targets: unknown[], targetOk = true) {
+    fetchMock.mockImplementation((url: string, opts?: RequestInit) => {
+      const method = opts?.method ?? 'GET'
 
       if (method === 'GET' && url.includes('/api/config')) {
         return Promise.resolve(fakeResponse({
           ok: true,
-          data: {
-            maxFileSizeBytes: 10 * 1024 * 1024,
-            deleteAfterSuccess: false,
-            deleteAfterFailure: false,
-            anonymizationOperator: 'replace',
-            analysisServiceUrl: 'https://analysis.example.com',
-            analysisServiceApiKey: 'test-api-key',
-            analysisServiceSentimentEnabled: sentimentEnabled,
-            analysisServiceToxicityEnabled: toxicityEnabled,
-            analysisServiceLanguageCode: 'en',
-            analysisServiceModel: 'gpt-4',
-            analysisServiceChannel: 'web-chat',
-            analysisServiceTags: ['support'],
-          },
+          data: { maxFileSizeBytes: 10 * 1024 * 1024, deleteAfterSuccess: false, deleteAfterFailure: false, anonymizationOperator: 'replace' },
         }))
+      }
+      if (method === 'GET' && url.includes('/api/targets')) {
+        return Promise.resolve(fakeResponse({ ok: true, data: targets }))
       }
       if (method === 'POST' && url.includes('/api/runs') && !url.includes('/api/runs/')) {
         return Promise.resolve(fakeResponse({ ok: true, data: { id: 'run-1' } }, true, 201))
@@ -424,115 +440,134 @@ describe('analysis service integration', () => {
       if (method === 'POST' && url.includes('/analyze')) {
         return Promise.resolve(fakeResponse([]))
       }
-      if (method === 'POST' && url.includes('/api/v1/analysis/')) {
-        return Promise.resolve(fakeResponse({ ok: true }, analysisOk, analysisOk ? 200 : 500))
+      if (url.includes('external.example.com')) {
+        return Promise.resolve(fakeResponse({ ok: true }, targetOk, targetOk ? 200 : 500))
       }
       return Promise.resolve(fakeResponse({ ok: true, data: null }))
     })
   }
 
-  it('calls sentiment endpoint with correct payload and X-API-Key header', async () => {
-    setupAnalysisFetch({ sentimentEnabled: true, toxicityEnabled: false })
+  it('calls DB delivery target with full AnonymizationResult when no bodyTemplate', async () => {
+    setupTargetFetch([makeTarget()])
     fsMod.stat.mockResolvedValue({ size: 256 })
     fsMod.readFile.mockResolvedValue(chatLogJson([{ id: '1', role: 'user', content: 'hello' }]))
 
     const { processFile } = await importProcessor()
     await processFile('/uploads/chat.json')
 
-    const sentimentCall = fetchMock.mock.calls.find(
-      (c: unknown[]) => callOpts(c).method === 'POST' && callUrl(c).includes('/api/v1/analysis/sentiment'),
+    const targetCall = fetchMock.mock.calls.find(
+      (c: unknown[]) => callUrl(c).includes('external.example.com'),
     )
-    expect(sentimentCall).toBeDefined()
+    expect(targetCall).toBeDefined()
+    const body = callBody(targetCall!) as Record<string, unknown>
+    // Full result shape
+    expect(body.source_file_hash).toBeTruthy()
+    expect(Array.isArray(body.messages)).toBe(true)
+  })
 
-    // Check X-API-Key header
-    const headers = callOpts(sentimentCall!).headers as Record<string, string>
-    expect(headers['X-API-Key']).toBe('test-api-key')
-
-    // Check payload shape
-    const body = callBody(sentimentCall!) as {
-      messages: Array<{ role: string; content: string }>
-      conversationId: string
-      languageCode: string
-      model: string
-      channel: string
-      tags: string[]
+  it('renders bodyTemplate substituting ${variable} placeholders', async () => {
+    const bodyTemplate = {
+      messages: '${messages}',
+      conversationId: '${source_file_hash}',
+      languageCode: 'en',
+      model: 'gpt-4',
     }
-    expect(body.messages).toHaveLength(1)
-    expect(body.messages[0]!.role).toBe('user')
-    expect(body.messages[0]!.content).toBe('hello')
-    expect(body.conversationId).toBeTruthy()
+    setupTargetFetch([makeTarget({ bodyTemplate })])
+    fsMod.stat.mockResolvedValue({ size: 256 })
+    fsMod.readFile.mockResolvedValue(chatLogJson([{ id: '1', role: 'user', content: 'hello' }]))
+
+    const { processFile } = await importProcessor()
+    await processFile('/uploads/chat.json')
+
+    const targetCall = fetchMock.mock.calls.find(
+      (c: unknown[]) => callUrl(c).includes('external.example.com'),
+    )
+    expect(targetCall).toBeDefined()
+    const body = callBody(targetCall!) as Record<string, unknown>
+    expect(Array.isArray(body.messages)).toBe(true)
+    expect(typeof body.conversationId).toBe('string')
+    expect((body.conversationId as string).length).toBeGreaterThan(0)
     expect(body.languageCode).toBe('en')
     expect(body.model).toBe('gpt-4')
-    expect(body.channel).toBe('web-chat')
-    expect(body.tags).toEqual(['support'])
+    // Full result fields not in template should not appear
+    expect(body.source_file_hash).toBeUndefined()
   })
 
-  it('calls toxicity endpoint with correct payload and X-API-Key header', async () => {
-    setupAnalysisFetch({ sentimentEnabled: false, toxicityEnabled: true })
+  it('includes X-API-Key header when auth is apiKeyHeader', async () => {
+    setupTargetFetch([makeTarget({ auth: { type: 'apiKeyHeader', header: 'X-API-Key', key: 'my-secret' } })])
     fsMod.stat.mockResolvedValue({ size: 256 })
     fsMod.readFile.mockResolvedValue(chatLogJson([{ id: '1', role: 'user', content: 'hello' }]))
 
     const { processFile } = await importProcessor()
     await processFile('/uploads/chat.json')
 
-    const toxicityCall = fetchMock.mock.calls.find(
-      (c: unknown[]) => callOpts(c).method === 'POST' && callUrl(c).includes('/api/v1/analysis/toxicity'),
+    const targetCall = fetchMock.mock.calls.find(
+      (c: unknown[]) => callUrl(c).includes('external.example.com'),
     )
-    expect(toxicityCall).toBeDefined()
-
-    const headers = callOpts(toxicityCall!).headers as Record<string, string>
-    expect(headers['X-API-Key']).toBe('test-api-key')
-
-    const body = callBody(toxicityCall!) as { messages: unknown[] }
-    expect(body.messages).toHaveLength(1)
-    // toxicity endpoint does not include languageCode
-    expect((body as Record<string, unknown>).languageCode).toBeUndefined()
+    expect(targetCall).toBeDefined()
+    const headers = callOpts(targetCall!).headers as Record<string, string>
+    expect(headers['X-API-Key']).toBe('my-secret')
   })
 
-  it('calls both sentiment and toxicity endpoints when both are enabled', async () => {
-    setupAnalysisFetch({ sentimentEnabled: true, toxicityEnabled: true })
+  it('includes Authorization: Bearer header when auth is bearerToken', async () => {
+    setupTargetFetch([makeTarget({ auth: { type: 'bearerToken', token: 'tok123' } })])
     fsMod.stat.mockResolvedValue({ size: 256 })
     fsMod.readFile.mockResolvedValue(chatLogJson([{ id: '1', role: 'user', content: 'hello' }]))
 
     const { processFile } = await importProcessor()
     await processFile('/uploads/chat.json')
 
-    const analysisCalls = fetchMock.mock.calls.filter(
-      (c: unknown[]) => callOpts(c).method === 'POST' && callUrl(c).includes('/api/v1/analysis/'),
+    const targetCall = fetchMock.mock.calls.find(
+      (c: unknown[]) => callUrl(c).includes('external.example.com'),
     )
-    const urls = analysisCalls.map((c: unknown[]) => callUrl(c) as string)
-    expect(urls.some((u: string) => u.includes('/sentiment'))).toBe(true)
-    expect(urls.some((u: string) => u.includes('/toxicity'))).toBe(true)
+    const headers = callOpts(targetCall!).headers as Record<string, string>
+    expect(headers['Authorization']).toBe('Bearer tok123')
   })
 
-  it('does not call analysis endpoints when analysisServiceUrl is not set', async () => {
-    setupHappyPathFetch() // default config – no analysis service
+  it('uses PUT method when target method is PUT', async () => {
+    setupTargetFetch([makeTarget({ method: 'PUT' })])
     fsMod.stat.mockResolvedValue({ size: 256 })
     fsMod.readFile.mockResolvedValue(chatLogJson([{ id: '1', role: 'user', content: 'hello' }]))
 
     const { processFile } = await importProcessor()
     await processFile('/uploads/chat.json')
 
-    const analysisCalls = fetchMock.mock.calls.filter(
-      (c: unknown[]) => callUrl(c).includes('/api/v1/analysis/'),
+    const targetCall = fetchMock.mock.calls.find(
+      (c: unknown[]) => callUrl(c).includes('external.example.com'),
     )
-    expect(analysisCalls).toHaveLength(0)
+    expect(targetCall).toBeDefined()
+    expect(callOpts(targetCall!).method).toBe('PUT')
   })
 
-  it('continues processing (delivery) even when analysis service returns an error', async () => {
-    setupAnalysisFetch({ sentimentEnabled: true, toxicityEnabled: false, analysisOk: false })
+  it('calls multiple enabled targets in order', async () => {
+    const target2 = makeTarget({ id: 'target-2', url: 'https://external.example.com/second' })
+    setupTargetFetch([makeTarget(), target2])
     fsMod.stat.mockResolvedValue({ size: 256 })
     fsMod.readFile.mockResolvedValue(chatLogJson([{ id: '1', role: 'user', content: 'hello' }]))
 
     const { processFile } = await importProcessor()
     await processFile('/uploads/chat.json')
 
-    // Delivery should still be attempted (run should not be marked failed due to analysis error)
+    const targetCalls = fetchMock.mock.calls.filter(
+      (c: unknown[]) => callUrl(c).includes('external.example.com'),
+    )
+    expect(targetCalls).toHaveLength(2)
+  })
+
+  it('marks run as failed when a DB target returns a non-ok response', async () => {
+    setupTargetFetch([makeTarget()], false)
+    fsMod.stat.mockResolvedValue({ size: 256 })
+    fsMod.readFile.mockResolvedValue(chatLogJson([{ id: '1', role: 'user', content: 'hello' }]))
+
+    const { processFile } = await importProcessor()
+    await processFile('/uploads/chat.json')
+
     const patchCalls = fetchMock.mock.calls.filter(
       (c: unknown[]) => callOpts(c).method === 'PATCH' && callUrl(c).includes('/api/runs/'),
     )
     const failPatch = patchCalls.find((c: unknown[]) => callBody(c).status === 'failed')
-    expect(failPatch).toBeUndefined()
+    expect(failPatch).toBeDefined()
+    expect(callBody(failPatch!).errorCode).toBe('DELIVERY_ERROR')
   })
 })
 

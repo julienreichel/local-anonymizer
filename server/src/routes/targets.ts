@@ -16,6 +16,7 @@ type TargetRow = {
   retries: number
   backoff_ms: number
   enabled: number
+  body_template: string | null
   created_at: string
   updated_at: string
 }
@@ -25,13 +26,14 @@ function rowToTarget(row: TargetRow): z.infer<typeof DeliveryTargetSchema> {
     id: row.id,
     name: row.name,
     url: row.url,
-    method: row.method as 'GET' | 'POST',
+    method: row.method as 'GET' | 'POST' | 'PUT',
     headers: JSON.parse(row.headers) as Record<string, string>,
     auth: JSON.parse(row.auth) as z.infer<typeof DeliveryTargetSchema>['auth'],
     timeoutMs: row.timeout_ms,
     retries: row.retries,
     backoffMs: row.backoff_ms,
     enabled: row.enabled === 1,
+    bodyTemplate: row.body_template ? JSON.parse(row.body_template) as Record<string, unknown> : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -67,8 +69,8 @@ export async function targetRoutes(app: FastifyInstance): Promise<void> {
     const d = parsed.data
     db.prepare(`
       INSERT INTO delivery_targets
-        (id, name, url, method, headers, auth, timeout_ms, retries, backoff_ms, enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, name, url, method, headers, auth, timeout_ms, retries, backoff_ms, enabled, body_template, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       d.name,
@@ -80,6 +82,7 @@ export async function targetRoutes(app: FastifyInstance): Promise<void> {
       d.retries ?? 0,
       d.backoffMs ?? 1000,
       (d.enabled ?? true) ? 1 : 0,
+      d.bodyTemplate !== undefined ? JSON.stringify(d.bodyTemplate) : null,
       now,
       now,
     )
@@ -108,16 +111,17 @@ export async function targetRoutes(app: FastifyInstance): Promise<void> {
       const now = nowIso()
       db.prepare(`
         UPDATE delivery_targets SET
-          name       = ?,
-          url        = ?,
-          method     = ?,
-          headers    = ?,
-          auth       = ?,
-          timeout_ms = ?,
-          retries    = ?,
-          backoff_ms = ?,
-          enabled    = ?,
-          updated_at = ?
+          name          = ?,
+          url           = ?,
+          method        = ?,
+          headers       = ?,
+          auth          = ?,
+          timeout_ms    = ?,
+          retries       = ?,
+          backoff_ms    = ?,
+          enabled       = ?,
+          body_template = ?,
+          updated_at    = ?
         WHERE id = ?
       `).run(
         d.name ?? existing.name,
@@ -129,6 +133,7 @@ export async function targetRoutes(app: FastifyInstance): Promise<void> {
         d.retries ?? existing.retries,
         d.backoffMs ?? existing.backoff_ms,
         d.enabled !== undefined ? (d.enabled ? 1 : 0) : existing.enabled,
+        d.bodyTemplate !== undefined ? JSON.stringify(d.bodyTemplate) : existing.body_template,
         now,
         req.params.id,
       )
@@ -192,7 +197,7 @@ export async function targetRoutes(app: FastifyInstance): Promise<void> {
       const res = await fetch(target.url, {
         method: target.method,
         headers,
-        body: target.method === 'POST' ? JSON.stringify(testPayload) : undefined,
+        body: target.method !== 'GET' ? JSON.stringify(testPayload) : undefined,
         signal: AbortSignal.timeout(target.timeoutMs),
       })
       return reply.send(

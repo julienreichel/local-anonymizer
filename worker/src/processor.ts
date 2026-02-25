@@ -10,6 +10,8 @@ import {
   type AnonymizationResult,
   type AnonymizedMessage,
   type AnonymizationOperator,
+  type DeliveryTarget,
+  type DeliveryTargetAuth,
 } from '@local-anonymizer/shared'
 import { PresidioClient, type PresidioOperatorsMap } from './presidio-client.js'
 import { logger } from './logger.js'
@@ -30,14 +32,6 @@ interface WorkerConfig {
   deleteAfterSuccess: boolean
   deleteAfterFailure: boolean
   anonymizationOperator: AnonymizationOperator
-  analysisServiceUrl?: string
-  analysisServiceApiKey?: string
-  analysisServiceSentimentEnabled: boolean
-  analysisServiceToxicityEnabled: boolean
-  analysisServiceLanguageCode: string
-  analysisServiceModel?: string
-  analysisServiceChannel?: string
-  analysisServiceTags?: string[]
 }
 
 async function getConfig(): Promise<WorkerConfig> {
@@ -52,14 +46,6 @@ async function getConfig(): Promise<WorkerConfig> {
       deleteAfterSuccess: json.data.deleteAfterSuccess ?? false,
       deleteAfterFailure: json.data.deleteAfterFailure ?? false,
       anonymizationOperator: json.data.anonymizationOperator ?? 'replace',
-      analysisServiceUrl: json.data.analysisServiceUrl,
-      analysisServiceApiKey: json.data.analysisServiceApiKey,
-      analysisServiceSentimentEnabled: json.data.analysisServiceSentimentEnabled ?? false,
-      analysisServiceToxicityEnabled: json.data.analysisServiceToxicityEnabled ?? false,
-      analysisServiceLanguageCode: json.data.analysisServiceLanguageCode ?? 'en',
-      analysisServiceModel: json.data.analysisServiceModel,
-      analysisServiceChannel: json.data.analysisServiceChannel,
-      analysisServiceTags: json.data.analysisServiceTags,
     }
   } catch {
     // Fall back to safe defaults if the API is unavailable
@@ -68,9 +54,6 @@ async function getConfig(): Promise<WorkerConfig> {
       deleteAfterSuccess: false,
       deleteAfterFailure: false,
       anonymizationOperator: 'replace',
-      analysisServiceSentimentEnabled: false,
-      analysisServiceToxicityEnabled: false,
-      analysisServiceLanguageCode: 'en',
     }
   }
 }
@@ -136,11 +119,93 @@ function buildAnonymizers(operator: AnonymizationOperator): PresidioOperatorsMap
   }
 }
 
-// ── Delivery helper ─────────────────────────────────────────────────────────
+// ── Delivery helpers ─────────────────────────────────────────────────────────
 
-async function deliverPayload(payload: AnonymizationResult): Promise<number | null> {
+/** Fetch all enabled delivery targets from the API. */
+async function fetchDeliveryTargets(): Promise<DeliveryTarget[]> {
+  try {
+    const res = await fetch(`${API_URL}/api/targets`)
+    const json = (await res.json()) as { ok: boolean; data: DeliveryTarget[] }
+    return json.ok ? json.data.filter(t => t.enabled) : []
+  } catch {
+    return []
+  }
+}
+
+/** Build auth headers for a delivery target. */
+function buildAuthHeaders(auth: DeliveryTargetAuth): Record<string, string> {
+  if (auth.type === 'bearerToken') return { Authorization: `Bearer ${auth.token}` }
+  if (auth.type === 'apiKeyHeader') return { [auth.header]: auth.key }
+  if (auth.type === 'basic') {
+    const encoded = Buffer.from(`${auth.username}:${auth.password}`).toString('base64')
+    return { Authorization: `Basic ${encoded}` }
+  }
+  return {}
+}
+
+/**
+ * Render a body template by substituting `${variable}` placeholders with
+ * values from the anonymization result.
+ *
+ * Available variables: messages, source_file_hash, processed_at, byte_size, metadata
+ *
+ * The `messages` variable maps to `{ role, content, timestamp? }[]` — the
+ * anonymized content without internal fields like `id` or `entities_found`.
+ */
+function renderBodyTemplate(
+  template: Record<string, unknown>,
+  result: AnonymizationResult,
+): string {
+  const vars: Record<string, unknown> = {
+    messages: result.messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      ...(m.timestamp !== undefined && { timestamp: m.timestamp }),
+    })),
+    source_file_hash: result.source_file_hash,
+    processed_at: result.processed_at,
+    byte_size: result.byte_size,
+    metadata: result.metadata,
+  }
+  const rendered = JSON.parse(
+    JSON.stringify(template, (_key, value: unknown) => {
+      if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
+        const varName = value.slice(2, -1)
+        return varName in vars ? vars[varName] : value
+      }
+      return value
+    }),
+  ) as Record<string, unknown>
+  return JSON.stringify(rendered)
+}
+
+/** Call a single delivery target with the anonymized result. */
+async function callTarget(target: DeliveryTarget, result: AnonymizationResult): Promise<number> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...target.headers,
+    ...buildAuthHeaders(target.auth),
+  }
+  const body = target.bodyTemplate
+    ? renderBodyTemplate(target.bodyTemplate, result)
+    : JSON.stringify(result)
+  const res = await fetch(target.url, {
+    method: target.method,
+    headers,
+    body: target.method !== 'GET' ? body : undefined,
+    signal: AbortSignal.timeout(target.timeoutMs),
+  })
+  if (!res.ok) throw new Error(`Delivery target "${target.name}" HTTP ${res.status}`)
+  return res.status
+}
+
+/**
+ * Backward-compatible delivery via TARGET_URL env var.
+ * Returns the HTTP status code, or null if TARGET_URL is not configured.
+ */
+async function deliverToTargetUrl(payload: AnonymizationResult): Promise<number | null> {
   if (!TARGET_URL) {
-    logger.warn('delivery_skipped', { reason: 'TARGET_URL_not_set' })
+    logger.warn('delivery_skipped', { reason: 'no_targets_configured' })
     return null
   }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -153,34 +218,6 @@ async function deliverPayload(payload: AnonymizationResult): Promise<number | nu
   })
   if (!res.ok) throw new Error(`Delivery target HTTP ${res.status}`)
   return res.status
-}
-
-// ── Analysis service helper ─────────────────────────────────────────────────
-
-interface AnalysisPayload {
-  messages: Array<{ role: string; content: string; timestamp?: string }>
-  conversationId?: string
-  languageCode?: string
-  model?: string
-  channel?: string
-  tags?: string[]
-}
-
-async function callAnalysisEndpoint(
-  url: string,
-  payload: AnalysisPayload,
-  apiKey: string,
-): Promise<void> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': apiKey,
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
-  })
-  if (!res.ok) throw new Error(`Analysis service HTTP ${res.status}`)
 }
 
 // ── File processing ─────────────────────────────────────────────────────────
@@ -314,54 +351,22 @@ export async function processFile(filePath: string): Promise<void> {
     await appendLog(runId, 'anonymize_succeeded', 'info', { entityCount: Object.values(presidioStats).reduce((a, b) => a + b, 0) })
   }
 
-  // ── Step 4: Call external analysis service (non-fatal) ─────────────────
-  if (config.analysisServiceUrl && config.analysisServiceApiKey) {
-    const analysisPayload: AnalysisPayload = {
-      messages: anonymizedMessages.map(m => ({
-        role: m.role,
-        content: m.content,
-        ...(m.timestamp !== undefined && { timestamp: m.timestamp }),
-      })),
-      conversationId: fileNameHash,
-      model: config.analysisServiceModel,
-      channel: config.analysisServiceChannel,
-      tags: config.analysisServiceTags,
-    }
-
-    if (config.analysisServiceSentimentEnabled) {
-      try {
-        await callAnalysisEndpoint(
-          `${config.analysisServiceUrl}/api/v1/analysis/sentiment`,
-          { ...analysisPayload, languageCode: config.analysisServiceLanguageCode },
-          config.analysisServiceApiKey,
-        )
-        logger.info('analysis_sentiment_succeeded', { runId: runId ?? undefined, fileHash: fileNameHash })
-      } catch (e) {
-        logger.warn('analysis_sentiment_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
-      }
-    }
-
-    if (config.analysisServiceToxicityEnabled) {
-      try {
-        await callAnalysisEndpoint(
-          `${config.analysisServiceUrl}/api/v1/analysis/toxicity`,
-          analysisPayload,
-          config.analysisServiceApiKey,
-        )
-        logger.info('analysis_toxicity_succeeded', { runId: runId ?? undefined, fileHash: fileNameHash })
-      } catch (e) {
-        logger.warn('analysis_toxicity_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
-      }
-    }
-  }
-
-  // ── Step 5: Deliver ────────────────────────────────────────────────────
+  // ── Step 4: Deliver ────────────────────────────────────────────────────
   if (runId) {
     await appendLog(runId, 'delivery_started', 'info')
   }
   const deliveryStart = Date.now()
   try {
-    const statusCode = await deliverPayload(result)
+    // Use DB-configured delivery targets; fall back to TARGET_URL env var
+    const targets = await fetchDeliveryTargets()
+    let statusCode: number | null = null
+    if (targets.length > 0) {
+      for (const target of targets) {
+        statusCode = await callTarget(target, result)
+      }
+    } else {
+      statusCode = await deliverToTargetUrl(result)
+    }
     const deliveryDurationMs = Date.now() - deliveryStart
     if (runId) {
       await updateRun(runId, {
@@ -391,7 +396,7 @@ export async function processFile(filePath: string): Promise<void> {
     return
   }
 
-  // ── Step 6: Cleanup ────────────────────────────────────────────────────
+  // ── Step 5: Cleanup ────────────────────────────────────────────────────
   if (config.deleteAfterSuccess) {
     try {
       await fs.unlink(filePath)
