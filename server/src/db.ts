@@ -69,4 +69,11 @@ export function migrate(db: Database.Database): void {
       meta        TEXT
     );
   `)
+
+  // Idempotent column additions (for existing databases)
+  try {
+    db.exec(`ALTER TABLE delivery_targets ADD COLUMN body_template TEXT`)
+  } catch {
+    // Column already exists — expected for databases created before this migration
+  }
 }
