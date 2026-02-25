@@ -106,17 +106,18 @@ Creates a new delivery target.
 
 **Request body**
 
-| Field        | Type     | Required | Default        | Description                              |
-|--------------|----------|----------|----------------|------------------------------------------|
-| `name`       | `string` | ✓        |                | Human-readable label                     |
-| `url`        | `string` | ✓        |                | Webhook URL                              |
-| `method`     | `string` |          | `POST`         | HTTP method (`GET` or `POST`)            |
-| `headers`    | `object` |          | `{}`           | Additional request headers               |
-| `auth`       | `object` |          | `{type:"none"}`| Auth config (see below)                  |
-| `timeoutMs`  | `number` |          | `15000`        | Request timeout in ms                    |
-| `retries`    | `number` |          | `0`            | Number of retry attempts                 |
-| `backoffMs`  | `number` |          | `1000`         | Delay between retries in ms              |
-| `enabled`    | `boolean`|          | `true`         | Whether the target is active             |
+| Field          | Type     | Required | Default         | Description                                           |
+|----------------|----------|----------|-----------------|-------------------------------------------------------|
+| `name`         | `string` | ✓        |                 | Human-readable label                                  |
+| `url`          | `string` | ✓        |                 | Webhook URL                                           |
+| `method`       | `string` |          | `POST`          | HTTP method (`GET`, `POST`, or `PUT`)                 |
+| `headers`      | `object` |          | `{}`            | Additional request headers                            |
+| `auth`         | `object` |          | `{type:"none"}` | Auth config (see below)                               |
+| `timeoutMs`    | `number` |          | `15000`         | Request timeout in ms                                 |
+| `retries`      | `number` |          | `0`             | Number of retry attempts                              |
+| `backoffMs`    | `number` |          | `1000`          | Delay between retries in ms                           |
+| `enabled`      | `boolean`|          | `true`          | Whether the target is active                          |
+| `bodyTemplate` | `object` |          | _(none)_        | Optional JSON payload template (see Body template below) |
 
 **Auth types**
 
@@ -126,6 +127,33 @@ Creates a new delivery target.
 { "type": "apiKeyHeader", "header": "X-API-Key", "key": "<key>" }
 { "type": "basic", "username": "user", "password": "pass" }
 ```
+
+**Body template**
+
+When `bodyTemplate` is set, the worker sends the rendered template instead of the full `AnonymizationResult`. String values of the form `${variable}` are substituted with data from the anonymized result.
+
+Available variables:
+
+| Variable | Value |
+|---|---|
+| `${messages}` | Anonymized messages as `[{ role, content, timestamp? }]` |
+| `${source_file_hash}` | SHA-256 hash of the source filename |
+| `${processed_at}` | ISO-8601 processing timestamp |
+| `${byte_size}` | File size in bytes |
+| `${metadata}` | Optional metadata object from the chat log |
+
+Example:
+
+```json
+{
+  "messages": "${messages}",
+  "conversationId": "${source_file_hash}",
+  "languageCode": "en",
+  "model": "gpt-4"
+}
+```
+
+When `bodyTemplate` is omitted, the full `AnonymizationResult` object is sent as-is.
 
 #### `PUT /api/targets/:id`
 
