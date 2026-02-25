@@ -13,12 +13,14 @@
       <div class="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
         <UIcon name="i-heroicons-folder-open" class="w-5 h-5 text-blue-500 shrink-0" />
         <div>
-          <p class="font-mono text-sm font-medium">{{ form.watchFolderPath }}</p>
-          <p class="text-xs text-gray-500 mt-1">
-            Map your host folder to this container path in docker-compose.yml:
+          <p class="text-sm font-medium">Folder on your machine (drop files here):</p>
+          <p class="font-mono text-sm mt-1">{{ hostWatchFolder }}</p>
+          <p class="text-xs text-gray-500 mt-2">
+            Change this in <code>.env</code> with <code>UPLOADS_DIR=...</code>. Default is <code>./infra/volumes/uploads</code>.
           </p>
-          <pre class="text-xs bg-gray-100 dark:bg-gray-900 rounded px-2 py-1 mt-1 overflow-x-auto">volumes:
-  - ./uploads:{{ form.watchFolderPath }}</pre>
+          <p class="text-xs text-gray-400 mt-2">
+            Container path: <code>{{ form.watchFolderPath }}</code>
+          </p>
         </div>
       </div>
     </UCard>
@@ -108,6 +110,7 @@
 <script setup lang="ts">
 const api = useApi()
 const toast = useToast()
+const hostWatchFolder = './infra/volumes/uploads'
 
 const form = reactive({
   watchFolderPath: '/uploads',
