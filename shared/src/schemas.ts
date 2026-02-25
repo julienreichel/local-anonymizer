@@ -51,6 +51,25 @@ export const AppConfigSchema = z.object({
   acceptedExtensions: z.array(z.string()).default(['.json']),
   pollIntervalMs: z.number().int().positive().default(5000),
   anonymizationOperator: AnonymizationOperatorSchema.default('replace'),
+  // ---------------------------------------------------------------------------
+  // External analysis service (sentiment / toxicity)
+  // ---------------------------------------------------------------------------
+  /** Base URL of the external analysis service (e.g. https://analysis.example.com) */
+  analysisServiceUrl: z.string().url().optional(),
+  /** Value for the X-API-Key header sent to the analysis service */
+  analysisServiceApiKey: z.string().optional(),
+  /** When true, POST anonymized messages to <analysisServiceUrl>/api/v1/analysis/sentiment */
+  analysisServiceSentimentEnabled: z.boolean().default(false),
+  /** When true, POST anonymized messages to <analysisServiceUrl>/api/v1/analysis/toxicity */
+  analysisServiceToxicityEnabled: z.boolean().default(false),
+  /** BCP-47 language code forwarded to the sentiment endpoint (default: "en") */
+  analysisServiceLanguageCode: z.string().default('en'),
+  /** Optional model metadata forwarded to the analysis service */
+  analysisServiceModel: z.string().optional(),
+  /** Optional channel metadata forwarded to the analysis service */
+  analysisServiceChannel: z.string().optional(),
+  /** Optional tags metadata forwarded to the analysis service */
+  analysisServiceTags: z.array(z.string()).optional(),
 })
 
 // ---------------------------------------------------------------------------
