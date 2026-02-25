@@ -103,6 +103,9 @@
         </div>
       </template>
       <UTable :rows="recentRuns" :columns="columns" :loading="runsPending">
+        <template #sourceFileName-data="{ row }">
+          <span class="font-mono text-sm text-gray-500">{{ shortHash(row.sourceFileName) }}</span>
+        </template>
         <template #status-data="{ row }">
           <UBadge :color="statusColor(row.status)" variant="soft" size="xs">
             {{ row.status }}
@@ -203,6 +206,14 @@ function serviceColor(status: string): 'green' | 'red' | 'gray' {
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString()
+}
+
+function shortHash(value: string): string {
+  if (!value.startsWith('sha256:')) return value
+  const prefix = 'sha256:'
+  const hash = value.slice(prefix.length)
+  if (hash.length <= 12) return value
+  return `${prefix}${hash.slice(0, 4)}...${hash.slice(-4)}`
 }
 
 async function refreshAll() {
