@@ -6,6 +6,7 @@ import { logRoutes } from './routes/logs.js'
 import { configRoutes } from './routes/config.js'
 import { targetRoutes } from './routes/targets.js'
 import { runRoutes } from './routes/runs.js'
+import { uploadRoutes } from './routes/uploads.js'
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: true })
@@ -25,6 +26,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await app.register(healthRoutes)
   await app.register(configRoutes)
+  await app.register(uploadRoutes)
   await app.register(targetRoutes)
   await app.register(runRoutes)
   await app.register(logRoutes)

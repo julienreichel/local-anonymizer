@@ -65,6 +65,37 @@
       </UCard>
     </div>
 
+    <!-- Test upload -->
+    <UCard class="mt-6">
+      <template #header>
+        <h2 class="text-lg font-semibold">Test File Upload</h2>
+      </template>
+      <div
+        class="rounded-lg border-2 border-dashed p-6 text-center transition-colors"
+        :class="uploadHover ? 'border-blue-500 bg-blue-50/40 dark:bg-blue-900/10' : 'border-gray-300 dark:border-gray-700'"
+        @dragenter.prevent="uploadHover = true"
+        @dragover.prevent="uploadHover = true"
+        @dragleave.prevent="uploadHover = false"
+        @drop.prevent="onDropFile"
+      >
+        <UIcon name="i-heroicons-arrow-up-tray" class="w-8 h-8 mx-auto mb-2 text-blue-500" />
+        <p class="text-sm">Drag and drop a <code>.json</code> file here</p>
+        <p class="text-xs text-gray-500 mt-1">The worker will process it as if added to the watch folder.</p>
+        <input
+          ref="fileInput"
+          type="file"
+          accept=".json,application/json"
+          class="hidden"
+          @change="onFileInputChange"
+        />
+        <div class="mt-3">
+          <UButton size="sm" variant="outline" :loading="uploading" @click="fileInput?.click()">
+            Select file
+          </UButton>
+        </div>
+      </div>
+    </UCard>
+
     <!-- Create / Edit Modal -->
     <UModal v-model="showModal" :ui="{ width: 'max-w-xl' }">
       <UCard>
@@ -207,6 +238,9 @@ async function testTarget(id: string) {
 const showModal = ref(false)
 const editingTarget = ref<DeliveryTarget | null>(null)
 const saving = ref(false)
+const uploading = ref(false)
+const uploadHover = ref(false)
+const fileInput = ref<HTMLInputElement | null>(null)
 
 const authTypeOptions = [
   { label: 'No auth', value: 'none' },
@@ -335,6 +369,70 @@ async function deleteTarget() {
   } finally {
     deleting.value = false
   }
+}
+
+async function uploadFile(file: File) {
+  if (!file.name.toLowerCase().endsWith('.json')) {
+    toast.add({
+      title: 'Invalid file type',
+      description: 'Only .json files are accepted.',
+      color: 'red',
+      icon: 'i-heroicons-x-circle',
+    })
+    return
+  }
+
+  uploading.value = true
+  try {
+    const content = await file.text()
+    const result = await api.uploadFile({ fileName: file.name, content })
+    if (result.queued) {
+      toast.add({
+        title: 'File uploaded',
+        description: `${file.name} was queued for processing.`,
+        color: 'green',
+        icon: 'i-heroicons-check-circle',
+      })
+    } else if (result.reason === 'already_delivered') {
+      toast.add({
+        title: 'Duplicate content',
+        description: `${file.name} was already delivered before (${result.sourceFileName}).`,
+        color: 'gray',
+        icon: 'i-heroicons-information-circle',
+      })
+    } else if (result.reason === 'already_queued') {
+      toast.add({
+        title: 'Already queued',
+        description: `${file.name} is already waiting to be processed (${result.sourceFileName}).`,
+        color: 'blue',
+        icon: 'i-heroicons-clock',
+      })
+    }
+  } catch (e) {
+    toast.add({
+      title: 'Upload failed',
+      description: (e as Error).message,
+      color: 'red',
+      icon: 'i-heroicons-x-circle',
+    })
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function onDropFile(event: DragEvent) {
+  uploadHover.value = false
+  const file = event.dataTransfer?.files?.[0]
+  if (!file) return
+  await uploadFile(file)
+}
+
+async function onFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  await uploadFile(file)
+  input.value = ''
 }
 
 onMounted(() => {

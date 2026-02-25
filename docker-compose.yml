@@ -39,11 +39,13 @@ services:
       - PORT=3001
       - HOST=0.0.0.0
       - DATA_DIR=/data
+      - UPLOADS_DIR=/uploads
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
       - PRESIDIO_ANALYZER_URL=http://presidio-analyzer:3000
       - PRESIDIO_ANONYMIZER_URL=http://presidio-anonymizer:3000
     volumes:
       - ${DATA_DIR:-./infra/volumes/data}:/data
+      - ${UPLOADS_DIR:-./infra/volumes/uploads}:/uploads
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/health"]
       interval: 15s

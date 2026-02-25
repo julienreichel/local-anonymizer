@@ -3,6 +3,10 @@ import Database from 'better-sqlite3'
 import { setDb, migrate } from '../db.js'
 import { buildApp } from '../app.js'
 import type { FastifyInstance } from 'fastify'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
 
 function createTestDb(): Database.Database {
   const db = new Database(':memory:')
@@ -12,8 +16,12 @@ function createTestDb(): Database.Database {
 }
 
 let app: FastifyInstance
+let uploadsDir: string
+const originalUploadsDir = process.env.UPLOADS_DIR
 
 beforeEach(async () => {
+  uploadsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'local-anonymizer-uploads-'))
+  process.env.UPLOADS_DIR = uploadsDir
   // Use a fresh in-memory DB for each test
   const db = createTestDb()
   setDb(db)
@@ -22,6 +30,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close()
+  await fs.rm(uploadsDir, { recursive: true, force: true })
+  process.env.UPLOADS_DIR = originalUploadsDir
 })
 
 // ---------------------------------------------------------------------------
@@ -104,6 +114,116 @@ describe('PUT /api/config', () => {
     const body = res.json<{ ok: boolean; error: { code: string } }>()
     expect(body.ok).toBe(false)
     expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Uploads
+// ---------------------------------------------------------------------------
+
+describe('POST /api/uploads', () => {
+  it('writes uploaded JSON content to uploads directory', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/uploads',
+      payload: {
+        fileName: 'sample.json',
+        content: '{"messages":[{"content":"hello"}]}',
+      },
+    })
+
+    expect(res.statusCode).toBe(201)
+    const body = res.json<{ ok: boolean; data: { fileName: string; bytesWritten: number; path: string; sourceFileName: string; queued: boolean } }>()
+    expect(body.ok).toBe(true)
+    expect(body.data.fileName).toBe('sample.json')
+    expect(body.data.sourceFileName).toMatch(/^sha256:/)
+    expect(body.data.queued).toBe(true)
+    const written = await fs.readFile(path.join(uploadsDir, 'sample.json'), 'utf-8')
+    expect(written).toBe('{"messages":[{"content":"hello"}]}')
+    expect(body.data.bytesWritten).toBe(written.length)
+  })
+
+  it('returns 400 for invalid payload', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/uploads',
+      payload: { fileName: '' },
+    })
+    expect(res.statusCode).toBe(400)
+    const body = res.json<{ ok: boolean }>()
+    expect(body.ok).toBe(false)
+  })
+
+  it('returns already_delivered for duplicate content hash', async () => {
+    const content = '{"messages":[{"content":"hello"}]}'
+    const hash = createHash('sha256').update(content).digest('hex')
+    const now = new Date().toISOString()
+    const db = createTestDb()
+    setDb(db)
+    db.prepare(`
+      INSERT INTO processing_runs
+        (id, created_at, updated_at, source_type, source_file_name, source_file_size, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'run-1',
+      now,
+      now,
+      'folderUpload',
+      `sha256:${hash}`,
+      Buffer.byteLength(content, 'utf-8'),
+      'delivered',
+    )
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/uploads',
+      payload: {
+        fileName: 'sample.json',
+        content,
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json<{ ok: boolean; data: { queued: boolean; reason: string } }>()
+    expect(body.ok).toBe(true)
+    expect(body.data.queued).toBe(false)
+    expect(body.data.reason).toBe('already_delivered')
+  })
+
+  it('returns already_queued when same content hash is pending', async () => {
+    const content = '{"messages":[{"content":"hello"}]}'
+    const hash = createHash('sha256').update(content).digest('hex')
+    const now = new Date().toISOString()
+    const db = createTestDb()
+    setDb(db)
+    db.prepare(`
+      INSERT INTO processing_runs
+        (id, created_at, updated_at, source_type, source_file_name, source_file_size, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'run-2',
+      now,
+      now,
+      'folderUpload',
+      `sha256:${hash}`,
+      Buffer.byteLength(content, 'utf-8'),
+      'processing',
+    )
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/uploads',
+      payload: {
+        fileName: 'sample.json',
+        content,
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json<{ ok: boolean; data: { queued: boolean; reason: string } }>()
+    expect(body.ok).toBe(true)
+    expect(body.data.queued).toBe(false)
+    expect(body.data.reason).toBe('already_queued')
   })
 })
 

@@ -39,6 +39,15 @@ export const RunStatsSchema = z.object({
   pending: z.number(),
 })
 
+export const UploadFileResultSchema = z.object({
+  fileName: z.string(),
+  bytesWritten: z.number(),
+  path: z.string(),
+  sourceFileName: z.string(),
+  queued: z.boolean(),
+  reason: z.enum(['already_delivered', 'already_queued']).optional(),
+})
+
 export const AppConfigSchema = z.object({
   watchFolderPath: z.string().default('/uploads'),
   deleteAfterSuccess: z.boolean().default(false),
@@ -109,6 +118,7 @@ export const HealthSchema = z.object({
 
 export type ProcessingRun = z.infer<typeof ProcessingRunSchema>
 export type RunStats = z.infer<typeof RunStatsSchema>
+export type UploadFileResult = z.infer<typeof UploadFileResultSchema>
 export type AppConfig = z.infer<typeof AppConfigSchema>
 export type DeliveryTarget = z.infer<typeof DeliveryTargetSchema>
 export type AuditLogEvent = z.infer<typeof AuditLogEventSchema>
@@ -210,6 +220,8 @@ export function useApi() {
     getConfig: () => get('/api/config', AppConfigSchema),
     updateConfig: (body: Partial<AppConfig>) =>
       put('/api/config', body as Record<string, unknown>, AppConfigSchema),
+    uploadFile: (body: { fileName: string; content: string }) =>
+      post('/api/uploads', body, UploadFileResultSchema),
 
     // Targets
     getTargets: () => get('/api/targets', z.array(DeliveryTargetSchema)),
