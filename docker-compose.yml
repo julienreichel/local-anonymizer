@@ -40,6 +40,8 @@ services:
       - HOST=0.0.0.0
       - DATA_DIR=/data
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      - PRESIDIO_ANALYZER_URL=http://presidio-analyzer:3000
+      - PRESIDIO_ANONYMIZER_URL=http://presidio-anonymizer:3000
     volumes:
       - ${DATA_DIR:-./infra/volumes/data}:/data
     healthcheck:

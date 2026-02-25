@@ -36,6 +36,26 @@ describe('GET /api/health', () => {
     expect(body.ok).toBe(true)
     expect(body.data.status).toBe('ok')
     expect(body.data.services.api).toBe('ok')
+    expect(body.data.services.worker).toBe('unknown')
+  })
+
+  it('reports worker ok after heartbeat', async () => {
+    const logRes = await app.inject({
+      method: 'POST',
+      url: '/api/logs',
+      payload: {
+        level: 'info',
+        eventType: 'worker_heartbeat',
+        meta: { source: 'test' },
+      },
+    })
+    expect(logRes.statusCode).toBe(201)
+
+    const healthRes = await app.inject({ method: 'GET', url: '/api/health' })
+    expect(healthRes.statusCode).toBe(200)
+    const body = healthRes.json<{ ok: boolean; data: { services: Record<string, string> } }>()
+    expect(body.ok).toBe(true)
+    expect(body.data.services.worker).toBe('ok')
   })
 })
 

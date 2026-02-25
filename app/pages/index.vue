@@ -24,9 +24,11 @@
           <UBadge color="green" variant="soft" size="xs">ok</UBadge>
         </div>
         <div class="flex flex-col items-center gap-1">
-          <UIcon :name="serviceIcon(workerStatus)" class="w-6 h-6" :class="serviceIconColor(workerStatus)" />
+          <UIcon :name="serviceIcon(healthData?.services?.worker ?? 'unknown')" class="w-6 h-6" :class="serviceIconColor(healthData?.services?.worker ?? 'unknown')" />
           <span class="text-xs font-medium">Worker</span>
-          <UBadge :color="serviceColor(workerStatus)" variant="soft" size="xs">{{ workerStatus }}</UBadge>
+          <UBadge :color="serviceColor(healthData?.services?.worker ?? 'unknown')" variant="soft" size="xs">
+            {{ healthData?.services?.worker ?? 'unknown' }}
+          </UBadge>
         </div>
         <div class="flex flex-col items-center gap-1">
           <UIcon :name="serviceIcon(healthData?.services?.presidioAnalyzer ?? 'unknown')" class="w-6 h-6" :class="serviceIconColor(healthData?.services?.presidioAnalyzer ?? 'unknown')" />
@@ -139,17 +141,6 @@ const { data: rawHealth, pending: healthPending, refresh: refreshHealth } = awai
 )
 const healthData = computed(() => rawHealth.value)
 const apiStatusColor = computed<'green' | 'red'>(() => (healthData.value?.status === 'ok' ? 'green' : 'red'))
-
-// Infer worker status from recent run activity.
-// The worker doesn't expose its own health endpoint, so we approximate:
-// if there are active (queued/processing) runs, the worker is likely running.
-// When idle this shows 'unknown', not necessarily meaning the worker is down.
-const workerStatus = computed(() => {
-  if (!rawRuns.value) return 'unknown' as const
-  // If there are runs in non-terminal state, worker is likely active
-  const active = rawRuns.value.some((r) => ['queued', 'processing'].includes(r.status))
-  return active ? 'ok' : ('unknown' as const)
-})
 
 // Runs list
 const { data: rawRuns, pending: runsPending, refresh: refreshRuns } = await useLazyAsyncData(

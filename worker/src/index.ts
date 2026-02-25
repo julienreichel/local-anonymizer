@@ -1,12 +1,29 @@
 import chokidar from 'chokidar'
 import path from 'node:path'
-import { POLL_INTERVAL_MS } from '@local-anonymizer/shared'
+import { POLL_INTERVAL_MS, WORKER_HEARTBEAT_INTERVAL_MS } from '@local-anonymizer/shared'
 import { processFile } from './processor.js'
 import { logger } from './logger.js'
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR ?? '/uploads'
+const API_URL = process.env.API_URL ?? 'http://api:3001'
 
 logger.info('watcher_starting', { uploadsDir: UPLOADS_DIR })
+
+async function sendWorkerHeartbeat(): Promise<void> {
+  try {
+    await fetch(`${API_URL}/api/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        eventType: 'worker_heartbeat',
+        level: 'info',
+        meta: { uploadsDir: UPLOADS_DIR },
+      }),
+    })
+  } catch (err) {
+    logger.warn('worker_heartbeat_failed', { errorMessage: (err as Error).message })
+  }
+}
 
 // Use polling as the primary cross-platform strategy.
 // chokidar falls back to native FS events where available (macOS FSEvents,
@@ -48,11 +65,18 @@ watcher.on('error', (err: unknown) => {
 
 watcher.on('ready', () => {
   logger.info('watcher_ready', { uploadsDir: UPLOADS_DIR })
+  void sendWorkerHeartbeat()
 })
+
+const heartbeatTimer = setInterval(() => {
+  void sendWorkerHeartbeat()
+}, WORKER_HEARTBEAT_INTERVAL_MS)
+heartbeatTimer.unref()
 
 // Graceful shutdown
 function shutdown() {
   logger.info('shutdown_initiated')
+  clearInterval(heartbeatTimer)
   watcher.close().then(() => process.exit(0))
 }
 

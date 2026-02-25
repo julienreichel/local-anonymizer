@@ -18,6 +18,12 @@ export const ACCEPTED_EXTENSIONS = ['.json'] as const
 /** Worker polling interval fallback (ms) – used when FS events are unavailable */
 export const POLL_INTERVAL_MS = 5_000
 
+/** Worker heartbeat interval (ms) – controls worker liveness updates to API */
+export const WORKER_HEARTBEAT_INTERVAL_MS = 15_000
+
+/** Maximum heartbeat age (ms) before worker is considered unhealthy */
+export const WORKER_HEARTBEAT_STALE_MS = 45_000
+
 /** Maximum file size the worker will process (10 MB) */
 export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 

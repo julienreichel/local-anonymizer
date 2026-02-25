@@ -132,6 +132,7 @@ export const AuditLogEventLevelSchema = z.enum(['info', 'warn', 'error'])
 
 export const AuditLogEventTypeSchema = z.enum([
   'file_detected',
+  'worker_heartbeat',
   'anonymize_started',
   'anonymize_succeeded',
   'delivery_started',

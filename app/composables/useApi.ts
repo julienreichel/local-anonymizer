@@ -68,6 +68,7 @@ export const AuditLogEventSchema = z.object({
   runId: z.string().optional(),
   eventType: z.enum([
     'file_detected',
+    'worker_heartbeat',
     'anonymize_started',
     'anonymize_succeeded',
     'delivery_started',
@@ -84,6 +85,7 @@ export const HealthSchema = z.object({
   services: z
     .object({
       api: z.enum(['ok', 'error']),
+      worker: z.enum(['ok', 'error', 'unknown']),
       presidioAnalyzer: z.enum(['ok', 'error', 'unknown']),
       presidioAnonymizer: z.enum(['ok', 'error', 'unknown']),
     })
