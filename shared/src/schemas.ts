@@ -5,8 +5,8 @@ import { z } from 'zod'
 // ---------------------------------------------------------------------------
 
 export const ChatMessageSchema = z.object({
-  id: z.string(),
-  role: z.enum(['user', 'assistant', 'system']),
+  id: z.string().optional(),
+  role: z.enum(['user', 'assistant', 'system']).optional(),
   content: z.string(),
   timestamp: z.string().datetime().optional(),
 })

@@ -311,15 +311,17 @@ export async function processFile(filePath: string): Promise<void> {
   const anonymizedMessages: AnonymizedMessage[] = []
   const presidioStats: Record<string, number> = {}
 
-  for (const msg of chatLog.messages) {
+  for (const [index, msg] of chatLog.messages.entries()) {
     try {
       const analysisResults = await presidio.analyze(msg.content, LANGUAGE)
       const anonymizedContent = analysisResults.length > 0
         ? await presidio.anonymize(msg.content, analysisResults, buildAnonymizers(config.anonymizationOperator))
         : msg.content
+      const messageId = msg.id ?? `msg-${index + 1}`
+      const messageRole = msg.role ?? 'user'
       anonymizedMessages.push({
-        id: msg.id,
-        role: msg.role,
+        id: messageId,
+        role: messageRole,
         content: anonymizedContent,
         timestamp: msg.timestamp,
         entities_found: analysisResults.length,
