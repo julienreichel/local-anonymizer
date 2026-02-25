@@ -106,6 +106,21 @@ async function appendLog(
   })
 }
 
+async function hasDeliveredRun(sourceFileName: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${API_URL}/api/runs?status=delivered&q=${encodeURIComponent(sourceFileName)}&limit=20`,
+    )
+    const json = (await res.json()) as {
+      ok: boolean
+      data: Array<{ sourceFileName: string }>
+    }
+    return json.ok && json.data.some((run) => run.sourceFileName === sourceFileName)
+  } catch {
+    return false
+  }
+}
+
 // ── Presidio helpers ────────────────────────────────────────────────────────
 
 /** Build the Presidio anonymizers map based on the configured operator. */
@@ -251,10 +266,26 @@ export async function processFile(filePath: string): Promise<void> {
     return
   }
 
-  // Store only a sanitized reference: hash of filename – no raw path or content
-  const fileNameHash = hashString(fileName)
-  const sourceFileName = `sha256:${fileNameHash}`
-  logger.info('file_detected', { fileHash: fileNameHash, byteSize })
+  let raw: string
+  try {
+    raw = await fs.readFile(filePath, 'utf-8')
+  } catch {
+    if (config.deleteAfterFailure) {
+      await fs.unlink(filePath).catch(() => {})
+    }
+    return
+  }
+
+  // Store only a sanitized reference: hash of file content – no raw path/content persisted.
+  const contentHash = hashString(raw)
+  const sourceFileName = `sha256:${contentHash}`
+  logger.info('file_detected', { fileHash: contentHash, byteSize })
+
+  // Skip reprocessing if this exact content hash was already delivered before.
+  if (await hasDeliveredRun(sourceFileName)) {
+    logger.info('file_skipped', { reason: 'already_delivered', fileHash: contentHash })
+    return
+  }
 
   const startMs = Date.now()
   let runId: string | null = null
@@ -277,26 +308,12 @@ export async function processFile(filePath: string): Promise<void> {
     }
   }
 
-  let raw: string
-  try {
-    raw = await fs.readFile(filePath, 'utf-8')
-  } catch {
-    if (runId) {
-      await updateRun(runId, { status: 'failed', errorCode: 'READ_ERROR', errorMessageSafe: 'Could not read file' })
-      await appendLog(runId, 'run_failed', 'error', { errorCode: 'READ_ERROR' })
-    }
-    if (config.deleteAfterFailure) {
-      await fs.unlink(filePath).catch(() => {})
-    }
-    return
-  }
-
   // Parse chat log
   let chatLog: ReturnType<typeof ChatLogSchema.parse>
   try {
     chatLog = ChatLogSchema.parse(JSON.parse(raw))
   } catch (e) {
-    logger.error('schema_validation_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorCode: 'INVALID_SCHEMA' })
+    logger.error('schema_validation_failed', { runId: runId ?? undefined, fileHash: contentHash, errorCode: 'INVALID_SCHEMA' })
     if (runId) {
       await updateRun(runId, { status: 'failed', errorCode: 'INVALID_SCHEMA', errorMessageSafe: 'Invalid schema' })
       await appendLog(runId, 'run_failed', 'error', { errorCode: 'INVALID_SCHEMA' })
@@ -330,7 +347,7 @@ export async function processFile(filePath: string): Promise<void> {
         presidioStats[r.entity_type] = (presidioStats[r.entity_type] ?? 0) + 1
       }
     } catch (e) {
-      logger.error('presidio_error', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
+      logger.error('presidio_error', { runId: runId ?? undefined, fileHash: contentHash, errorMessage: (e as Error).message })
       if (runId) {
         await updateRun(runId, { status: 'failed', errorCode: 'PRESIDIO_ERROR', errorMessageSafe: `Presidio error: ${(e as Error).message}` })
         await appendLog(runId, 'run_failed', 'error', { errorCode: 'PRESIDIO_ERROR' })
@@ -343,7 +360,7 @@ export async function processFile(filePath: string): Promise<void> {
   }
 
   const result: AnonymizationResult = {
-    source_file_hash: fileNameHash,
+    source_file_hash: contentHash,
     byte_size: byteSize,
     processed_at: nowIso(),
     messages: anonymizedMessages,
@@ -382,9 +399,9 @@ export async function processFile(filePath: string): Promise<void> {
       })
       await appendLog(runId, 'delivery_succeeded', 'info', { statusCode, deliveryDurationMs })
     }
-    logger.info('delivery_succeeded', { runId: runId ?? undefined, fileHash: fileNameHash, deliveryDurationMs, statusCode: statusCode ?? undefined })
+    logger.info('delivery_succeeded', { runId: runId ?? undefined, fileHash: contentHash, deliveryDurationMs, statusCode: statusCode ?? undefined })
   } catch (e) {
-    logger.error('delivery_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
+    logger.error('delivery_failed', { runId: runId ?? undefined, fileHash: contentHash, errorMessage: (e as Error).message })
     if (runId) {
       await updateRun(runId, {
         status: 'failed',
@@ -409,9 +426,9 @@ export async function processFile(filePath: string): Promise<void> {
         await updateRun(runId, { status: 'deleted' })
         await appendLog(runId, 'cleanup_deleted', 'info')
       }
-      logger.info('cleanup_deleted', { runId: runId ?? undefined, fileHash: fileNameHash })
+      logger.info('cleanup_deleted', { runId: runId ?? undefined, fileHash: contentHash })
     } catch (e) {
-      logger.warn('cleanup_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
+      logger.warn('cleanup_failed', { runId: runId ?? undefined, fileHash: contentHash, errorMessage: (e as Error).message })
     }
   }
 }

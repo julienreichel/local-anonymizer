@@ -30,7 +30,7 @@ export const AnonymizedMessageSchema = z.object({
 })
 
 export const AnonymizationResultSchema = z.object({
-  source_file_hash: z.string(), // SHA-256 of original filename (not content)
+  source_file_hash: z.string(), // SHA-256 of source file content
   byte_size: z.number().int().nonnegative(),
   processed_at: z.string().datetime(),
   messages: z.array(AnonymizedMessageSchema),
