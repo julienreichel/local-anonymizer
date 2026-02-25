@@ -58,6 +58,18 @@ describe('GET /api/config', () => {
       pollIntervalMs: 5000,
     })
   })
+
+  it('returns default analysis service config (disabled)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/config' })
+    expect(res.statusCode).toBe(200)
+    const body = res.json<{ ok: boolean; data: Record<string, unknown> }>()
+    expect(body.ok).toBe(true)
+    expect(body.data.analysisServiceSentimentEnabled).toBe(false)
+    expect(body.data.analysisServiceToxicityEnabled).toBe(false)
+    expect(body.data.analysisServiceLanguageCode).toBe('en')
+    expect(body.data.analysisServiceUrl).toBeUndefined()
+    expect(body.data.analysisServiceApiKey).toBeUndefined()
+  })
 })
 
 describe('PUT /api/config', () => {
@@ -72,6 +84,46 @@ describe('PUT /api/config', () => {
     expect(body.ok).toBe(true)
     expect(body.data.deleteAfterSuccess).toBe(true)
     expect(body.data.pollIntervalMs).toBe(3000)
+  })
+
+  it('stores and returns analysis service configuration', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/config',
+      payload: {
+        analysisServiceUrl: 'https://analysis.example.com',
+        analysisServiceApiKey: 'my-secret-key',
+        analysisServiceSentimentEnabled: true,
+        analysisServiceToxicityEnabled: true,
+        analysisServiceLanguageCode: 'fr',
+        analysisServiceModel: 'gpt-4',
+        analysisServiceChannel: 'web-chat',
+        analysisServiceTags: ['support', 'qa'],
+      },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json<{ ok: boolean; data: Record<string, unknown> }>()
+    expect(body.ok).toBe(true)
+    expect(body.data.analysisServiceUrl).toBe('https://analysis.example.com')
+    expect(body.data.analysisServiceApiKey).toBe('my-secret-key')
+    expect(body.data.analysisServiceSentimentEnabled).toBe(true)
+    expect(body.data.analysisServiceToxicityEnabled).toBe(true)
+    expect(body.data.analysisServiceLanguageCode).toBe('fr')
+    expect(body.data.analysisServiceModel).toBe('gpt-4')
+    expect(body.data.analysisServiceChannel).toBe('web-chat')
+    expect(body.data.analysisServiceTags).toEqual(['support', 'qa'])
+  })
+
+  it('returns 400 when analysisServiceUrl is not a valid URL', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/config',
+      payload: { analysisServiceUrl: 'not-a-url' },
+    })
+    expect(res.statusCode).toBe(400)
+    const body = res.json<{ ok: boolean; error: { code: string } }>()
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
   it('returns 400 on invalid data', async () => {

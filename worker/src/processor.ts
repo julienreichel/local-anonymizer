@@ -30,6 +30,14 @@ interface WorkerConfig {
   deleteAfterSuccess: boolean
   deleteAfterFailure: boolean
   anonymizationOperator: AnonymizationOperator
+  analysisServiceUrl?: string
+  analysisServiceApiKey?: string
+  analysisServiceSentimentEnabled: boolean
+  analysisServiceToxicityEnabled: boolean
+  analysisServiceLanguageCode: string
+  analysisServiceModel?: string
+  analysisServiceChannel?: string
+  analysisServiceTags?: string[]
 }
 
 async function getConfig(): Promise<WorkerConfig> {
@@ -44,6 +52,14 @@ async function getConfig(): Promise<WorkerConfig> {
       deleteAfterSuccess: json.data.deleteAfterSuccess ?? false,
       deleteAfterFailure: json.data.deleteAfterFailure ?? false,
       anonymizationOperator: json.data.anonymizationOperator ?? 'replace',
+      analysisServiceUrl: json.data.analysisServiceUrl,
+      analysisServiceApiKey: json.data.analysisServiceApiKey,
+      analysisServiceSentimentEnabled: json.data.analysisServiceSentimentEnabled ?? false,
+      analysisServiceToxicityEnabled: json.data.analysisServiceToxicityEnabled ?? false,
+      analysisServiceLanguageCode: json.data.analysisServiceLanguageCode ?? 'en',
+      analysisServiceModel: json.data.analysisServiceModel,
+      analysisServiceChannel: json.data.analysisServiceChannel,
+      analysisServiceTags: json.data.analysisServiceTags,
     }
   } catch {
     // Fall back to safe defaults if the API is unavailable
@@ -52,6 +68,9 @@ async function getConfig(): Promise<WorkerConfig> {
       deleteAfterSuccess: false,
       deleteAfterFailure: false,
       anonymizationOperator: 'replace',
+      analysisServiceSentimentEnabled: false,
+      analysisServiceToxicityEnabled: false,
+      analysisServiceLanguageCode: 'en',
     }
   }
 }
@@ -134,6 +153,34 @@ async function deliverPayload(payload: AnonymizationResult): Promise<number | nu
   })
   if (!res.ok) throw new Error(`Delivery target HTTP ${res.status}`)
   return res.status
+}
+
+// ── Analysis service helper ─────────────────────────────────────────────────
+
+interface AnalysisPayload {
+  messages: Array<{ role: string; content: string; timestamp?: string }>
+  conversationId?: string
+  languageCode?: string
+  model?: string
+  channel?: string
+  tags?: string[]
+}
+
+async function callAnalysisEndpoint(
+  url: string,
+  payload: AnalysisPayload,
+  apiKey: string,
+): Promise<void> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': apiKey,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+  })
+  if (!res.ok) throw new Error(`Analysis service HTTP ${res.status}`)
 }
 
 // ── File processing ─────────────────────────────────────────────────────────
@@ -267,7 +314,48 @@ export async function processFile(filePath: string): Promise<void> {
     await appendLog(runId, 'anonymize_succeeded', 'info', { entityCount: Object.values(presidioStats).reduce((a, b) => a + b, 0) })
   }
 
-  // ── Step 4: Deliver ────────────────────────────────────────────────────
+  // ── Step 4: Call external analysis service (non-fatal) ─────────────────
+  if (config.analysisServiceUrl && config.analysisServiceApiKey) {
+    const analysisPayload: AnalysisPayload = {
+      messages: anonymizedMessages.map(m => ({
+        role: m.role,
+        content: m.content,
+        ...(m.timestamp !== undefined && { timestamp: m.timestamp }),
+      })),
+      conversationId: fileNameHash,
+      model: config.analysisServiceModel,
+      channel: config.analysisServiceChannel,
+      tags: config.analysisServiceTags,
+    }
+
+    if (config.analysisServiceSentimentEnabled) {
+      try {
+        await callAnalysisEndpoint(
+          `${config.analysisServiceUrl}/api/v1/analysis/sentiment`,
+          { ...analysisPayload, languageCode: config.analysisServiceLanguageCode },
+          config.analysisServiceApiKey,
+        )
+        logger.info('analysis_sentiment_succeeded', { runId: runId ?? undefined, fileHash: fileNameHash })
+      } catch (e) {
+        logger.warn('analysis_sentiment_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
+      }
+    }
+
+    if (config.analysisServiceToxicityEnabled) {
+      try {
+        await callAnalysisEndpoint(
+          `${config.analysisServiceUrl}/api/v1/analysis/toxicity`,
+          analysisPayload,
+          config.analysisServiceApiKey,
+        )
+        logger.info('analysis_toxicity_succeeded', { runId: runId ?? undefined, fileHash: fileNameHash })
+      } catch (e) {
+        logger.warn('analysis_toxicity_failed', { runId: runId ?? undefined, fileHash: fileNameHash, errorMessage: (e as Error).message })
+      }
+    }
+  }
+
+  // ── Step 5: Deliver ────────────────────────────────────────────────────
   if (runId) {
     await appendLog(runId, 'delivery_started', 'info')
   }
@@ -303,7 +391,7 @@ export async function processFile(filePath: string): Promise<void> {
     return
   }
 
-  // ── Step 5: Cleanup ────────────────────────────────────────────────────
+  // ── Step 6: Cleanup ────────────────────────────────────────────────────
   if (config.deleteAfterSuccess) {
     try {
       await fs.unlink(filePath)
