@@ -85,7 +85,7 @@ export const HealthSchema = z.object({
   services: z
     .object({
       api: z.enum(['ok', 'error']),
-      worker: z.enum(['ok', 'error', 'unknown']),
+      worker: z.enum(['ok', 'error', 'unknown']).optional(),
       presidioAnalyzer: z.enum(['ok', 'error', 'unknown']),
       presidioAnonymizer: z.enum(['ok', 'error', 'unknown']),
     })

@@ -208,4 +208,8 @@ function formatDate(iso: string) {
 async function refreshAll() {
   await Promise.all([refreshHealth(), refreshRuns()])
 }
+
+onMounted(() => {
+  void refreshAll()
+})
 </script>
