@@ -102,6 +102,67 @@
         </UButton>
       </UForm>
     </UCard>
+
+    <!-- Analysis Settings -->
+    <UCard class="mt-6">
+      <template #header>
+        <h2 class="text-lg font-semibold">Analysis Settings (Amazon Comprehend)</h2>
+      </template>
+
+      <UForm :state="form" @submit="save" class="flex flex-col gap-5">
+
+        <!-- AWS Region -->
+        <UFormGroup label="AWS Region" name="awsRegion">
+          <UInput
+            v-model="form.awsRegion"
+            placeholder="us-east-1"
+          />
+          <template #hint>
+            <span class="text-xs text-gray-400">AWS region for Amazon Comprehend calls.</span>
+          </template>
+        </UFormGroup>
+
+        <!-- AWS Access Key ID -->
+        <UFormGroup label="AWS Access Key ID" name="awsAccessKeyId">
+          <UInput
+            v-model="form.awsAccessKeyId"
+            placeholder="AKIAIOSFODNN7EXAMPLE"
+          />
+        </UFormGroup>
+
+        <!-- AWS Secret Access Key -->
+        <UFormGroup label="AWS Secret Access Key" name="awsSecretAccessKey">
+          <UInput
+            v-model="form.awsSecretAccessKey"
+            type="password"
+            placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+          />
+          <template #hint>
+            <span class="text-xs text-gray-400">Leave blank to use IAM role / environment credentials.</span>
+          </template>
+        </UFormGroup>
+
+        <!-- Analysis API Keys -->
+        <UFormGroup label="Analysis API Keys" name="analysisApiKeys">
+          <UInput
+            v-model="analysisApiKeysRaw"
+            placeholder="key-abc123, key-def456"
+          />
+          <template #hint>
+            <span class="text-xs text-gray-400">
+              Comma-separated list of valid API keys clients must send in the
+              <code>X-API-Key</code> header to access
+              <code>POST /api/v1/analysis/sentiment</code> and
+              <code>POST /api/v1/analysis/toxicity</code>.
+            </span>
+          </template>
+        </UFormGroup>
+
+        <UButton type="submit" :loading="saving" icon="i-heroicons-check">
+          Save Configuration
+        </UButton>
+      </UForm>
+    </UCard>
   </UContainer>
 </template>
 
@@ -117,6 +178,10 @@ const form = reactive({
   acceptedExtensions: ['.json'] as string[],
   pollIntervalMs: 5000,
   anonymizationOperator: 'replace' as 'replace' | 'redact' | 'hash',
+  awsRegion: '',
+  awsAccessKeyId: '',
+  awsSecretAccessKey: '',
+  analysisApiKeys: [] as string[],
 })
 
 const extensionsRaw = computed({
@@ -128,6 +193,16 @@ const extensionsRaw = computed({
         const ext = s.trim().toLowerCase()
         return ext.startsWith('.') ? ext : `.${ext}`
       })
+      .filter(Boolean)
+  },
+})
+
+const analysisApiKeysRaw = computed({
+  get: () => form.analysisApiKeys.join(', '),
+  set: (val: string) => {
+    form.analysisApiKeys = val
+      .split(',')
+      .map((s) => s.trim())
       .filter(Boolean)
   },
 })
@@ -153,6 +228,10 @@ watchEffect(() => {
   form.acceptedExtensions = cfg.acceptedExtensions
   form.pollIntervalMs = cfg.pollIntervalMs
   form.anonymizationOperator = cfg.anonymizationOperator
+  form.awsRegion = cfg.awsRegion
+  form.awsAccessKeyId = cfg.awsAccessKeyId
+  form.awsSecretAccessKey = cfg.awsSecretAccessKey
+  form.analysisApiKeys = cfg.analysisApiKeys
 })
 
 async function save() {

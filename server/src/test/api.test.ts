@@ -1,8 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { setDb, migrate } from '../db.js'
 import { buildApp } from '../app.js'
 import type { FastifyInstance } from 'fastify'
+
+// Mock AWS Comprehend SDK for analysis route tests
+vi.mock('@aws-sdk/client-comprehend', () => {
+  const send = vi.fn()
+  return {
+    ComprehendClient: vi.fn(() => ({ send })),
+    DetectSentimentCommand: vi.fn(),
+    DetectToxicContentCommand: vi.fn(),
+    __send: send,
+  }
+})
 
 function createTestDb(): Database.Database {
   const db = new Database(':memory:')
@@ -309,5 +320,122 @@ describe('GET /api/logs', () => {
     expect(res.statusCode).toBe(200)
     const body = res.json<{ data: unknown[] }>()
     expect(body.data).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Analysis – sentinel / auth checks (no real AWS calls needed)
+// ---------------------------------------------------------------------------
+
+const ANALYSIS_MESSAGES = [
+  { role: 'user', content: 'I love this product!' },
+  { role: 'assistant', content: 'Thank you for your feedback.' },
+]
+
+describe('POST /api/v1/analysis/sentiment – auth & config validation', () => {
+  it('returns 401 when X-API-Key header is missing', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/analysis/sentiment',
+      payload: { messages: ANALYSIS_MESSAGES },
+    })
+    expect(res.statusCode).toBe(401)
+    const body = res.json<{ ok: boolean; error: { code: string } }>()
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('UNAUTHORIZED')
+  })
+
+  it('returns 401 when X-API-Key is invalid', async () => {
+    // Set a valid API key in config
+    await app.inject({
+      method: 'PUT',
+      url: '/api/config',
+      payload: { analysisApiKeys: ['valid-key-1'] },
+    })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/analysis/sentiment',
+      payload: { messages: ANALYSIS_MESSAGES },
+      headers: { 'x-api-key': 'wrong-key' },
+    })
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('returns 503 when AWS region is not configured', async () => {
+    await app.inject({
+      method: 'PUT',
+      url: '/api/config',
+      payload: { analysisApiKeys: ['my-key'], awsRegion: '' },
+    })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/analysis/sentiment',
+      payload: { messages: ANALYSIS_MESSAGES },
+      headers: { 'x-api-key': 'my-key' },
+    })
+    expect(res.statusCode).toBe(503)
+    const body = res.json<{ ok: boolean; error: { code: string } }>()
+    expect(body.error.code).toBe('AWS_NOT_CONFIGURED')
+  })
+
+  it('returns 400 on invalid request body', async () => {
+    await app.inject({
+      method: 'PUT',
+      url: '/api/config',
+      payload: { analysisApiKeys: ['my-key'] },
+    })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/analysis/sentiment',
+      payload: { messages: [] }, // empty messages array violates min(1)
+      headers: { 'x-api-key': 'my-key' },
+    })
+    expect(res.statusCode).toBe(400)
+    const body = res.json<{ ok: boolean; error: { code: string } }>()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+})
+
+describe('POST /api/v1/analysis/toxicity – auth & config validation', () => {
+  it('returns 401 when X-API-Key header is missing', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/analysis/toxicity',
+      payload: { messages: ANALYSIS_MESSAGES },
+    })
+    expect(res.statusCode).toBe(401)
+    const body = res.json<{ ok: boolean; error: { code: string } }>()
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('UNAUTHORIZED')
+  })
+
+  it('returns 503 when AWS region is not configured', async () => {
+    await app.inject({
+      method: 'PUT',
+      url: '/api/config',
+      payload: { analysisApiKeys: ['tox-key'], awsRegion: '' },
+    })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/analysis/toxicity',
+      payload: { messages: ANALYSIS_MESSAGES },
+      headers: { 'x-api-key': 'tox-key' },
+    })
+    expect(res.statusCode).toBe(503)
+  })
+
+  it('returns 400 on invalid request body', async () => {
+    await app.inject({
+      method: 'PUT',
+      url: '/api/config',
+      payload: { analysisApiKeys: ['tox-key'] },
+    })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/analysis/toxicity',
+      payload: { messages: [] },
+      headers: { 'x-api-key': 'tox-key' },
+    })
+    expect(res.statusCode).toBe(400)
   })
 })

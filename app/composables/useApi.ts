@@ -37,6 +37,10 @@ export const AppConfigSchema = z.object({
   acceptedExtensions: z.array(z.string()).default(['.json']),
   pollIntervalMs: z.number().default(5000),
   anonymizationOperator: z.enum(['replace', 'redact', 'hash']).default('replace'),
+  awsRegion: z.string().default(''),
+  awsAccessKeyId: z.string().default(''),
+  awsSecretAccessKey: z.string().default(''),
+  analysisApiKeys: z.array(z.string()).default([]),
 })
 
 export const DeliveryTargetAuthSchema = z.discriminatedUnion('type', [

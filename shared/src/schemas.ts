@@ -51,6 +51,85 @@ export const AppConfigSchema = z.object({
   acceptedExtensions: z.array(z.string()).default(['.json']),
   pollIntervalMs: z.number().int().positive().default(5000),
   anonymizationOperator: AnonymizationOperatorSchema.default('replace'),
+  // Analysis (Amazon Comprehend) settings
+  awsRegion: z.string().default(''),
+  awsAccessKeyId: z.string().default(''),
+  awsSecretAccessKey: z.string().default(''),
+  analysisApiKeys: z.array(z.string()).default([]),
+})
+
+// ---------------------------------------------------------------------------
+// Analysis request / response schemas
+// ---------------------------------------------------------------------------
+
+export const AnalysisMessageSchema = z.object({
+  role: z.enum(['user', 'assistant', 'system']),
+  content: z.string(),
+  timestamp: z.string().datetime().optional(),
+})
+
+export const AnalysisRequestSchema = z.object({
+  messages: z.array(AnalysisMessageSchema).min(1),
+  conversationId: z.string().optional(),
+  languageCode: z.string().default('en'),
+  model: z.string().optional(),
+  channel: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+})
+
+export const SentimentScoresSchema = z.object({
+  Positive: z.number(),
+  Negative: z.number(),
+  Neutral: z.number(),
+  Mixed: z.number(),
+})
+
+export const SentimentResultSchema = z.object({
+  role: z.enum(['user', 'assistant', 'system']),
+  content: z.string(),
+  timestamp: z.string().optional(),
+  sentiment: z.enum(['POSITIVE', 'NEGATIVE', 'NEUTRAL', 'MIXED']),
+  scores: SentimentScoresSchema,
+})
+
+export const SentimentSummarySchema = z.object({
+  dominant: z.enum(['POSITIVE', 'NEGATIVE', 'NEUTRAL', 'MIXED']),
+  counts: z.object({
+    POSITIVE: z.number(),
+    NEGATIVE: z.number(),
+    NEUTRAL: z.number(),
+    MIXED: z.number(),
+  }),
+})
+
+export const SentimentResponseSchema = z.object({
+  conversationId: z.string().optional(),
+  results: z.array(SentimentResultSchema),
+  summary: SentimentSummarySchema,
+})
+
+export const ToxicityLabelSchema = z.object({
+  name: z.string(),
+  score: z.number(),
+})
+
+export const ToxicityResultSchema = z.object({
+  role: z.enum(['user', 'assistant', 'system']),
+  content: z.string(),
+  timestamp: z.string().optional(),
+  toxicity: z.number(),
+  labels: z.array(ToxicityLabelSchema),
+})
+
+export const ToxicitySummarySchema = z.object({
+  maxToxicity: z.number(),
+  toxicMessageCount: z.number(),
+})
+
+export const ToxicityResponseSchema = z.object({
+  conversationId: z.string().optional(),
+  results: z.array(ToxicityResultSchema),
+  summary: ToxicitySummarySchema,
 })
 
 // ---------------------------------------------------------------------------
@@ -158,3 +237,9 @@ export type ProcessingRun = z.infer<typeof ProcessingRunSchema>
 export type AuditLogEventLevel = z.infer<typeof AuditLogEventLevelSchema>
 export type AuditLogEventType = z.infer<typeof AuditLogEventTypeSchema>
 export type AuditLogEvent = z.infer<typeof AuditLogEventSchema>
+export type AnalysisMessage = z.infer<typeof AnalysisMessageSchema>
+export type AnalysisRequest = z.infer<typeof AnalysisRequestSchema>
+export type SentimentResult = z.infer<typeof SentimentResultSchema>
+export type SentimentResponse = z.infer<typeof SentimentResponseSchema>
+export type ToxicityResult = z.infer<typeof ToxicityResultSchema>
+export type ToxicityResponse = z.infer<typeof ToxicityResponseSchema>
