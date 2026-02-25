@@ -3,7 +3,7 @@ import { getDb } from '../db.js'
 import { DeliveryTargetSchema, okResponse, errResponse } from '@local-anonymizer/shared'
 import { z } from 'zod'
 import { v4 as uuidv4 } from 'uuid'
-import { nowIso } from '@local-anonymizer/shared'
+import { nowIso, normalizeLocalTargetUrl, type AnonymizationResult } from '@local-anonymizer/shared'
 
 type TargetRow = {
   id: string
@@ -46,6 +46,72 @@ const CreateBodySchema = DeliveryTargetSchema.omit({
 })
 
 const UpdateBodySchema = CreateBodySchema.partial()
+
+function normalizeDeliveryError(err: unknown, targetUrl: string, timeoutMs: number): { code: string; message: string } {
+  const asError = err as Error & { cause?: { code?: string; message?: string } }
+  const code = asError.cause?.code
+  const lowerUrl = targetUrl.toLowerCase()
+
+  if (asError.name === 'TimeoutError' || asError.name === 'AbortError') {
+    return {
+      code: 'DELIVERY_TIMEOUT',
+      message: `Connection timed out after ${timeoutMs}ms`,
+    }
+  }
+  if (code === 'ECONNREFUSED') {
+    const localhostHint = (lowerUrl.includes('://localhost') || lowerUrl.includes('://127.0.0.1'))
+      ? ' In Docker, localhost points to the API container itself.'
+      : ''
+    return {
+      code: 'DELIVERY_CONNECTION_REFUSED',
+      message: `Connection refused by target host.${localhostHint}`,
+    }
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return {
+      code: 'DELIVERY_DNS_ERROR',
+      message: 'Could not resolve target hostname',
+    }
+  }
+  if (code === 'ECONNRESET') {
+    return {
+      code: 'DELIVERY_CONNECTION_RESET',
+      message: 'Connection reset by target host',
+    }
+  }
+
+  return {
+    code: 'DELIVERY_ERROR',
+    message: asError.message || 'Connection failed',
+  }
+}
+
+function renderBodyTemplate(
+  template: Record<string, unknown>,
+  result: AnonymizationResult,
+): string {
+  const vars: Record<string, unknown> = {
+    messages: result.messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      ...(m.timestamp !== undefined && { timestamp: m.timestamp }),
+    })),
+    source_file_hash: result.source_file_hash,
+    processed_at: result.processed_at,
+    byte_size: result.byte_size,
+    metadata: result.metadata,
+  }
+  const rendered = JSON.parse(
+    JSON.stringify(template, (_key, value: unknown) => {
+      if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
+        const varName = value.slice(2, -1)
+        return varName in vars ? vars[varName] : value
+      }
+      return value
+    }),
+  ) as Record<string, unknown>
+  return JSON.stringify(rendered)
+}
 
 export async function targetRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/targets – list all targets
@@ -186,27 +252,54 @@ export async function targetRoutes(app: FastifyInstance): Promise<void> {
       headers['Authorization'] = `Basic ${encoded}`
     }
 
-    // Minimal test payload – no PII whatsoever
-    const testPayload = {
-      test: true,
-      source: 'local-anonymizer',
-      timestamp: new Date().toISOString(),
+    // Synthetic payload matching real delivery shape (no PII)
+    const testResult: AnonymizationResult = {
+      source_file_hash: 'test-source-hash',
+      byte_size: 128,
+      processed_at: new Date().toISOString(),
+      messages: [
+        {
+          id: 'test-1',
+          role: 'user',
+          content: 'Sanitized test message',
+          timestamp: new Date().toISOString(),
+          entities_found: 0,
+        },
+      ],
+      metadata: { test: true, source: 'local-anonymizer' },
     }
+    const requestUrl = normalizeLocalTargetUrl(target.url)
+    const requestBody = target.bodyTemplate
+      ? renderBodyTemplate(target.bodyTemplate, testResult)
+      : JSON.stringify(testResult)
 
     try {
-      const res = await fetch(target.url, {
+      const res = await fetch(requestUrl, {
         method: target.method,
         headers,
-        body: target.method !== 'GET' ? JSON.stringify(testPayload) : undefined,
+        body: target.method !== 'GET' ? requestBody : undefined,
         signal: AbortSignal.timeout(target.timeoutMs),
       })
+      let responsePreview: string | undefined
+      if (!res.ok) {
+        const raw = await res.text().catch(() => '')
+        const compact = raw.replace(/\s+/g, ' ').trim()
+        responsePreview = compact ? compact.slice(0, 200) : undefined
+      }
       return reply.send(
-        okResponse({ statusCode: res.status, ok: res.ok }),
+        okResponse({
+          statusCode: res.status,
+          ok: res.ok,
+          statusText: res.statusText,
+          responsePreview,
+          requestUrl,
+        }),
       )
     } catch (err) {
+      const deliveryError = normalizeDeliveryError(err, requestUrl, target.timeoutMs)
       return reply
         .status(502)
-        .send(errResponse('DELIVERY_ERROR', (err as Error).message))
+        .send(errResponse(deliveryError.code, deliveryError.message))
     }
   })
 }

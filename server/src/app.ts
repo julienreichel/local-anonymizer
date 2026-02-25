@@ -12,6 +12,8 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await app.register(cors, {
     origin: process.env.CORS_ORIGIN ?? '*',
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   })
 
   // Rate-limit all routes: 200 requests per minute per IP.

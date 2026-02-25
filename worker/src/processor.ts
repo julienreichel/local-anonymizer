@@ -6,6 +6,7 @@ import {
   MAX_FILE_SIZE_BYTES,
   DELIVERY_TIMEOUT_MS,
   hashString,
+  normalizeLocalTargetUrl,
   nowIso,
   type AnonymizationResult,
   type AnonymizedMessage,
@@ -189,7 +190,8 @@ async function callTarget(target: DeliveryTarget, result: AnonymizationResult): 
   const body = target.bodyTemplate
     ? renderBodyTemplate(target.bodyTemplate, result)
     : JSON.stringify(result)
-  const res = await fetch(target.url, {
+  const requestUrl = normalizeLocalTargetUrl(target.url)
+  const res = await fetch(requestUrl, {
     method: target.method,
     headers,
     body: target.method !== 'GET' ? body : undefined,
@@ -208,9 +210,10 @@ async function deliverToTargetUrl(payload: AnonymizationResult): Promise<number 
     logger.warn('delivery_skipped', { reason: 'no_targets_configured' })
     return null
   }
+  const requestUrl = normalizeLocalTargetUrl(TARGET_URL)
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (TARGET_AUTH_HEADER) headers['Authorization'] = TARGET_AUTH_HEADER
-  const res = await fetch(TARGET_URL, {
+  const res = await fetch(requestUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify(payload),
@@ -410,4 +413,3 @@ export async function processFile(filePath: string): Promise<void> {
     }
   }
 }
-

@@ -136,8 +136,26 @@ function parseOk<T extends z.ZodTypeAny>(
 export function useApi() {
   const { apiBase } = useRuntimeConfig().public
 
+  function asApiErrorMessage(err: unknown): string {
+    const data = (err as { data?: unknown })?.data
+    const parsed = ErrEnvelope.safeParse(data)
+    if (parsed.success) {
+      return `${parsed.data.error.code}: ${parsed.data.error.message}`
+    }
+    const message = (err as Error)?.message
+    return message || 'Request failed'
+  }
+
+  async function request(path: string, opts?: Record<string, unknown>): Promise<unknown> {
+    try {
+      return await $fetch(`${apiBase}${path}`, opts)
+    } catch (err) {
+      throw new Error(asApiErrorMessage(err))
+    }
+  }
+
   async function get<T extends z.ZodTypeAny>(path: string, schema: T): Promise<z.infer<T>> {
-    const raw = await $fetch(`${apiBase}${path}`)
+    const raw = await request(path)
     return parseOk(schema, raw)
   }
 
@@ -146,7 +164,7 @@ export function useApi() {
     body: Record<string, unknown>,
     schema: T,
   ): Promise<z.infer<T>> {
-    const raw = await $fetch(`${apiBase}${path}`, { method: 'POST', body })
+    const raw = await request(path, { method: 'POST', body })
     return parseOk(schema, raw)
   }
 
@@ -155,7 +173,7 @@ export function useApi() {
     body: Record<string, unknown>,
     schema: T,
   ): Promise<z.infer<T>> {
-    const raw = await $fetch(`${apiBase}${path}`, { method: 'PUT', body })
+    const raw = await request(path, { method: 'PUT', body })
     return parseOk(schema, raw)
   }
 
@@ -164,12 +182,12 @@ export function useApi() {
     body: Record<string, unknown>,
     schema: T,
   ): Promise<z.infer<T>> {
-    const raw = await $fetch(`${apiBase}${path}`, { method: 'PATCH', body })
+    const raw = await request(path, { method: 'PATCH', body })
     return parseOk(schema, raw)
   }
 
   async function del(path: string): Promise<void> {
-    await $fetch(`${apiBase}${path}`, { method: 'DELETE' })
+    await request(path, { method: 'DELETE' })
   }
 
   return {
@@ -189,7 +207,12 @@ export function useApi() {
       put(`/api/targets/${id}`, body as Record<string, unknown>, DeliveryTargetSchema),
     deleteTarget: (id: string) => del(`/api/targets/${id}`),
     testTarget: (id: string) =>
-      get(`/api/targets/${id}/test`, z.object({ statusCode: z.number(), ok: z.boolean() })),
+      post(`/api/targets/${id}/test`, {}, z.object({
+        statusCode: z.number(),
+        ok: z.boolean(),
+        statusText: z.string().optional(),
+        responsePreview: z.string().optional(),
+      })),
 
     // Runs
     getRuns: (params?: { status?: string; q?: string; limit?: number }) => {

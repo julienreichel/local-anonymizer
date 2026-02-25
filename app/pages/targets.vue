@@ -184,14 +184,20 @@ async function testTarget(id: string) {
   delete testResults[id]
   try {
     const result = await api.testTarget(id)
+    const detail = (!result.ok && result.responsePreview) ? ` · ${result.responsePreview}` : ''
+    const statusText = result.statusText ? ` ${result.statusText}` : ''
+    const baseLabel = `HTTP ${result.statusCode}${statusText} – ${result.ok ? 'OK' : 'Error'}${detail}`
     testResults[id] = {
-      label: `HTTP ${result.statusCode} – ${result.ok ? 'OK' : 'Error'}`,
+      label: baseLabel.length > 140 ? `${baseLabel.slice(0, 137)}...` : baseLabel,
       color: result.ok ? 'green' : 'red',
     }
   } catch (e) {
-    // Show a safe message in the UI; the API error code (if any) is already sanitised
-    const msg = (e as Error).message ?? 'Connection failed'
-    testResults[id] = { label: msg.length > 80 ? 'Connection failed' : msg, color: 'red' }
+    const raw = (e as Error).message ?? 'Connection failed'
+    const compact = raw.replace(/\s+/g, ' ').trim()
+    testResults[id] = {
+      label: compact.length > 140 ? `${compact.slice(0, 137)}...` : compact,
+      color: 'red',
+    }
   } finally {
     testing[id] = false
   }
