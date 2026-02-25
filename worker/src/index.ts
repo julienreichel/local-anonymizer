@@ -47,7 +47,7 @@ const watcher = chokidar.watch(path.resolve(UPLOADS_DIR), {
 // Track files being processed to avoid double-processing
 const inFlight = new Set<string>()
 
-watcher.on('add', async (filePath: string) => {
+async function handleFileEvent(filePath: string): Promise<void> {
   if (inFlight.has(filePath)) return
   inFlight.add(filePath)
   try {
@@ -57,6 +57,14 @@ watcher.on('add', async (filePath: string) => {
   } finally {
     inFlight.delete(filePath)
   }
+}
+
+watcher.on('add', (filePath: string) => {
+  void handleFileEvent(filePath)
+})
+
+watcher.on('change', (filePath: string) => {
+  void handleFileEvent(filePath)
 })
 
 watcher.on('error', (err: unknown) => {
