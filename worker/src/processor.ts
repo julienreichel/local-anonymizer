@@ -382,24 +382,107 @@ export async function processFile(filePath: string): Promise<void> {
     // Use DB-configured delivery targets; fall back to TARGET_URL env var
     const targets = await fetchDeliveryTargets()
     let statusCode: number | null = null
+    let deliveryTargetCount = 0
+    let deliverySuccessCount = 0
+    let deliveryFailureCount = 0
+    let firstDeliveryError: string | null = null
+
     if (targets.length > 0) {
+      deliveryTargetCount = targets.length
       for (const target of targets) {
-        statusCode = await callTarget(target, result)
+        try {
+          statusCode = await callTarget(target, result)
+          deliverySuccessCount += 1
+          if (runId) {
+            await appendLog(runId, 'delivery_succeeded', 'info', {
+              targetName: target.name,
+              targetUrl: target.url,
+              statusCode,
+            })
+          }
+        } catch (e) {
+          deliveryFailureCount += 1
+          if (!firstDeliveryError) firstDeliveryError = (e as Error).message
+          if (runId) {
+            await appendLog(runId, 'delivery_failed', 'error', {
+              targetName: target.name,
+              targetUrl: target.url,
+              errorMessage: (e as Error).message,
+            })
+          }
+        }
       }
     } else {
-      statusCode = await deliverToTargetUrl(result)
+      deliveryTargetCount = TARGET_URL ? 1 : 0
+      try {
+        statusCode = await deliverToTargetUrl(result)
+        if (deliveryTargetCount > 0) deliverySuccessCount = 1
+      } catch (e) {
+        if (deliveryTargetCount > 0) deliveryFailureCount = 1
+        firstDeliveryError = (e as Error).message
+      }
     }
     const deliveryDurationMs = Date.now() - deliveryStart
+    if (deliveryFailureCount > 0) {
+      if (runId) {
+        await updateRun(runId, {
+          status: 'failed',
+          errorCode: 'DELIVERY_ERROR',
+          errorMessageSafe: `${deliveryFailureCount}/${deliveryTargetCount} targets failed${firstDeliveryError ? `: ${firstDeliveryError}` : ''}`,
+          deliveryTargetCount,
+          deliverySuccessCount,
+          deliveryFailureCount,
+          deliveryDurationMs,
+          durationMs: Date.now() - startMs,
+        })
+        await appendLog(runId, 'run_failed', 'error', {
+          errorCode: 'DELIVERY_ERROR',
+          deliveryTargetCount,
+          deliverySuccessCount,
+          deliveryFailureCount,
+        })
+      }
+      logger.error('delivery_failed', {
+        runId: runId ?? undefined,
+        fileHash: contentHash,
+        deliveryDurationMs,
+        deliveryTargetCount,
+        deliverySuccessCount,
+        deliveryFailureCount,
+        errorMessage: firstDeliveryError ?? undefined,
+      })
+      if (config.deleteAfterFailure) {
+        await fs.unlink(filePath).catch(() => {})
+      }
+      return
+    }
+
     if (runId) {
       await updateRun(runId, {
         status: 'delivered',
+        deliveryTargetCount,
+        deliverySuccessCount,
+        deliveryFailureCount,
         deliveryStatusCode: statusCode ?? undefined,
         deliveryDurationMs,
         durationMs: Date.now() - startMs,
       })
-      await appendLog(runId, 'delivery_succeeded', 'info', { statusCode, deliveryDurationMs })
+      await appendLog(runId, 'delivery_succeeded', 'info', {
+        statusCode,
+        deliveryDurationMs,
+        deliveryTargetCount,
+        deliverySuccessCount,
+      })
     }
-    logger.info('delivery_succeeded', { runId: runId ?? undefined, fileHash: contentHash, deliveryDurationMs, statusCode: statusCode ?? undefined })
+    logger.info('delivery_succeeded', {
+      runId: runId ?? undefined,
+      fileHash: contentHash,
+      deliveryDurationMs,
+      statusCode: statusCode ?? undefined,
+      deliveryTargetCount,
+      deliverySuccessCount,
+      deliveryFailureCount,
+    })
   } catch (e) {
     logger.error('delivery_failed', { runId: runId ?? undefined, fileHash: contentHash, errorMessage: (e as Error).message })
     if (runId) {

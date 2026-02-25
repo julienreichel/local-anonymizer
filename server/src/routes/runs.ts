@@ -21,6 +21,9 @@ type RunRow = {
   error_code: string | null
   error_message_safe: string | null
   presidio_stats: string | null
+  delivery_target_count: number | null
+  delivery_success_count: number | null
+  delivery_failure_count: number | null
   delivery_status_code: number | null
   delivery_duration_ms: number | null
   duration_ms: number | null
@@ -40,6 +43,9 @@ function rowToRun(row: RunRow): z.infer<typeof ProcessingRunSchema> {
     presidioStats: row.presidio_stats
       ? (JSON.parse(row.presidio_stats) as Record<string, number>)
       : undefined,
+    deliveryTargetCount: row.delivery_target_count ?? undefined,
+    deliverySuccessCount: row.delivery_success_count ?? undefined,
+    deliveryFailureCount: row.delivery_failure_count ?? undefined,
     deliveryStatusCode: row.delivery_status_code ?? undefined,
     deliveryDurationMs: row.delivery_duration_ms ?? undefined,
     durationMs: row.duration_ms ?? undefined,
@@ -59,6 +65,9 @@ const UpdateBodySchema = z.object({
   errorCode: z.string().optional(),
   errorMessageSafe: z.string().optional(),
   presidioStats: z.record(z.number().int().nonnegative()).optional(),
+  deliveryTargetCount: z.number().int().nonnegative().optional(),
+  deliverySuccessCount: z.number().int().nonnegative().optional(),
+  deliveryFailureCount: z.number().int().nonnegative().optional(),
   deliveryStatusCode: z.number().int().optional(),
   deliveryDurationMs: z.number().int().nonnegative().optional(),
   durationMs: z.number().int().nonnegative().optional(),
@@ -117,8 +126,10 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
     db.prepare(`
       INSERT INTO processing_runs
         (id, created_at, updated_at, source_type, source_file_name, source_file_size, status,
-         error_code, error_message_safe, presidio_stats, delivery_status_code, delivery_duration_ms, duration_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         error_code, error_message_safe, presidio_stats,
+         delivery_target_count, delivery_success_count, delivery_failure_count,
+         delivery_status_code, delivery_duration_ms, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       now,
@@ -130,6 +141,9 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
       d.errorCode ?? null,
       d.errorMessageSafe ?? null,
       d.presidioStats ? JSON.stringify(d.presidioStats) : null,
+      d.deliveryTargetCount ?? null,
+      d.deliverySuccessCount ?? null,
+      d.deliveryFailureCount ?? null,
       d.deliveryStatusCode ?? null,
       d.deliveryDurationMs ?? null,
       d.durationMs ?? null,
@@ -161,6 +175,9 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
           error_code           = ?,
           error_message_safe   = ?,
           presidio_stats       = ?,
+          delivery_target_count = ?,
+          delivery_success_count = ?,
+          delivery_failure_count = ?,
           delivery_status_code = ?,
           delivery_duration_ms = ?,
           duration_ms          = ?
@@ -173,6 +190,9 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
         d.presidioStats !== undefined
           ? JSON.stringify(d.presidioStats)
           : existing.presidio_stats,
+        d.deliveryTargetCount ?? existing.delivery_target_count,
+        d.deliverySuccessCount ?? existing.delivery_success_count,
+        d.deliveryFailureCount ?? existing.delivery_failure_count,
         d.deliveryStatusCode ?? existing.delivery_status_code,
         d.deliveryDurationMs ?? existing.delivery_duration_ms,
         d.durationMs ?? existing.duration_ms,

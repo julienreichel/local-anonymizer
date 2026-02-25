@@ -179,6 +179,7 @@ describe('AuditLogEventSchema', () => {
       'anonymize_succeeded',
       'delivery_started',
       'delivery_succeeded',
+      'delivery_failed',
       'cleanup_deleted',
       'run_failed',
     ]

@@ -40,8 +40,8 @@
           <span class="text-sm text-gray-500">{{ row.durationMs != null ? `${row.durationMs} ms` : '–' }}</span>
         </template>
         <template #deliveryStatusCode-data="{ row }">
-          <UBadge v-if="row.deliveryStatusCode" :color="deliveryColor(row.deliveryStatusCode)" variant="soft" size="xs">
-            {{ row.deliveryStatusCode }}
+          <UBadge v-if="deliverySummary(row)" :color="deliverySummaryColor(row)" variant="soft" size="xs">
+            {{ deliverySummary(row) }}
           </UBadge>
           <span v-else class="text-gray-400 text-sm">–</span>
         </template>
@@ -101,10 +101,10 @@
             <dd>{{ selectedRun.durationMs != null ? `${selectedRun.durationMs} ms` : '–' }}</dd>
           </div>
           <div>
-            <dt class="text-gray-500 text-xs">Delivery HTTP</dt>
+            <dt class="text-gray-500 text-xs">Delivery</dt>
             <dd>
-              <UBadge v-if="selectedRun.deliveryStatusCode" :color="deliveryColor(selectedRun.deliveryStatusCode)" variant="soft" size="xs">
-                {{ selectedRun.deliveryStatusCode }}
+              <UBadge v-if="deliverySummary(selectedRun)" :color="deliverySummaryColor(selectedRun)" variant="soft" size="xs">
+                {{ deliverySummary(selectedRun) }}
               </UBadge>
               <span v-else class="text-gray-400">–</span>
             </dd>
@@ -197,7 +197,7 @@ const columns = [
   { key: 'sourceFileSize', label: 'Size' },
   { key: 'status', label: 'Status' },
   { key: 'durationMs', label: 'Duration' },
-  { key: 'deliveryStatusCode', label: 'Delivery HTTP' },
+  { key: 'deliveryStatusCode', label: 'Delivery' },
   { key: 'createdAt', label: 'Created At' },
   { key: 'actions', label: '' },
 ]
@@ -263,6 +263,9 @@ const diagnosticsText = computed(() => {
       updatedAt: selectedRun.value.updatedAt,
       sourceFileName: selectedRun.value.sourceFileName,
       errorCode: selectedRun.value.errorCode,
+      deliveryTargetCount: selectedRun.value.deliveryTargetCount,
+      deliverySuccessCount: selectedRun.value.deliverySuccessCount,
+      deliveryFailureCount: selectedRun.value.deliveryFailureCount,
       deliveryStatusCode: selectedRun.value.deliveryStatusCode,
       durationMs: selectedRun.value.durationMs,
     },
@@ -309,6 +312,37 @@ function formatEventType(type: string) {
 
 function deliveryColor(code: number): 'green' | 'red' {
   return code < 400 ? 'green' : 'red'
+}
+
+function deliverySummary(run: ProcessingRun): string {
+  const targetCount = run.deliveryTargetCount ?? 0
+  const successCount = run.deliverySuccessCount ?? 0
+  const failureCount = run.deliveryFailureCount ?? 0
+  if (targetCount > 1) {
+    return `${successCount}/${targetCount} targets`
+  }
+  if (targetCount === 1 && run.deliveryStatusCode) {
+    return `HTTP ${run.deliveryStatusCode}`
+  }
+  if (targetCount === 1 && failureCount > 0) {
+    return '0/1 targets'
+  }
+  if (targetCount > 0) {
+    return `${successCount}/${targetCount} targets`
+  }
+  if (run.deliveryStatusCode) {
+    return `HTTP ${run.deliveryStatusCode}`
+  }
+  return ''
+}
+
+function deliverySummaryColor(run: ProcessingRun): 'green' | 'red' | 'yellow' {
+  const targetCount = run.deliveryTargetCount ?? 0
+  const failureCount = run.deliveryFailureCount ?? 0
+  if (failureCount > 0) return 'red'
+  if (targetCount > 1 && (run.deliverySuccessCount ?? 0) < targetCount) return 'yellow'
+  if (run.deliveryStatusCode !== undefined) return deliveryColor(run.deliveryStatusCode)
+  return 'green'
 }
 
 function eventDotColor(level: string) {

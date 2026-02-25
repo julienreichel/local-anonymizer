@@ -55,6 +55,9 @@ export function migrate(db: Database.Database): void {
       error_code           TEXT,
       error_message_safe   TEXT,
       presidio_stats       TEXT,
+      delivery_target_count INTEGER,
+      delivery_success_count INTEGER,
+      delivery_failure_count INTEGER,
       delivery_status_code INTEGER,
       delivery_duration_ms INTEGER,
       duration_ms          INTEGER
@@ -73,6 +76,21 @@ export function migrate(db: Database.Database): void {
   // Idempotent column additions (for existing databases)
   try {
     db.exec(`ALTER TABLE delivery_targets ADD COLUMN body_template TEXT`)
+  } catch {
+    // Column already exists — expected for databases created before this migration
+  }
+  try {
+    db.exec(`ALTER TABLE processing_runs ADD COLUMN delivery_target_count INTEGER`)
+  } catch {
+    // Column already exists — expected for databases created before this migration
+  }
+  try {
+    db.exec(`ALTER TABLE processing_runs ADD COLUMN delivery_success_count INTEGER`)
+  } catch {
+    // Column already exists — expected for databases created before this migration
+  }
+  try {
+    db.exec(`ALTER TABLE processing_runs ADD COLUMN delivery_failure_count INTEGER`)
   } catch {
     // Column already exists — expected for databases created before this migration
   }

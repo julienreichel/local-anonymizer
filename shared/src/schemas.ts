@@ -119,6 +119,9 @@ export const ProcessingRunSchema = z.object({
   errorCode: z.string().optional(),
   errorMessageSafe: z.string().optional(),
   presidioStats: z.record(z.number().int().nonnegative()).optional(),
+  deliveryTargetCount: z.number().int().nonnegative().optional(),
+  deliverySuccessCount: z.number().int().nonnegative().optional(),
+  deliveryFailureCount: z.number().int().nonnegative().optional(),
   deliveryStatusCode: z.number().int().optional(),
   deliveryDurationMs: z.number().int().nonnegative().optional(),
   durationMs: z.number().int().nonnegative().optional(),
@@ -137,6 +140,7 @@ export const AuditLogEventTypeSchema = z.enum([
   'anonymize_succeeded',
   'delivery_started',
   'delivery_succeeded',
+  'delivery_failed',
   'cleanup_deleted',
   'run_failed',
 ])
