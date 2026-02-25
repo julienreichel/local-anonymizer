@@ -336,4 +336,8 @@ async function deleteTarget() {
     deleting.value = false
   }
 }
+
+onMounted(() => {
+  void refresh()
+})
 </script>

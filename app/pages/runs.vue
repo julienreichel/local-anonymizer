@@ -240,6 +240,7 @@ async function openDetail(run: ProcessingRun) {
 
 // If ?id= is in the URL, open that run automatically
 onMounted(async () => {
+  await refresh()
   const id = route.query.id as string | undefined
   if (id) {
     try {
