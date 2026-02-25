@@ -1,5 +1,7 @@
 import chokidar from 'chokidar'
 import path from 'node:path'
+import fs from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
 import { POLL_INTERVAL_MS, WORKER_HEARTBEAT_INTERVAL_MS } from '@local-anonymizer/shared'
 import { processFile } from './processor.js'
 import { logger } from './logger.js'
@@ -46,6 +48,7 @@ const watcher = chokidar.watch(path.resolve(UPLOADS_DIR), {
 
 // Track files being processed to avoid double-processing
 const inFlight = new Set<string>()
+const fileState = new Map<string, string>()
 
 async function handleFileEvent(filePath: string): Promise<void> {
   if (inFlight.has(filePath)) return
@@ -74,6 +77,7 @@ watcher.on('error', (err: unknown) => {
 watcher.on('ready', () => {
   logger.info('watcher_ready', { uploadsDir: UPLOADS_DIR })
   void sendWorkerHeartbeat()
+  void scanUploadsDir()
 })
 
 const heartbeatTimer = setInterval(() => {
@@ -81,10 +85,61 @@ const heartbeatTimer = setInterval(() => {
 }, WORKER_HEARTBEAT_INTERVAL_MS)
 heartbeatTimer.unref()
 
+async function listJsonFiles(dir: string): Promise<string[]> {
+  const out: string[] = []
+  let entries: Dirent[]
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return out
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const fullPath = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      out.push(...await listJsonFiles(fullPath))
+      continue
+    }
+    if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.json') {
+      out.push(fullPath)
+    }
+  }
+  return out
+}
+
+/**
+ * Fallback scanner for Docker bind mounts where chokidar events can be unreliable.
+ * We track mtime+size and process only new/changed files once they are stable.
+ */
+async function scanUploadsDir(): Promise<void> {
+  const files = await listJsonFiles(path.resolve(UPLOADS_DIR))
+  const now = Date.now()
+  for (const filePath of files) {
+    let stat: { size: number; mtimeMs: number }
+    try {
+      stat = await fs.stat(filePath)
+    } catch {
+      continue
+    }
+    // Similar to awaitWriteFinish: skip files modified in the last 2 seconds.
+    if ((now - stat.mtimeMs) < 2000) continue
+    const stamp = `${stat.size}:${Math.floor(stat.mtimeMs)}`
+    if (fileState.get(filePath) === stamp) continue
+    fileState.set(filePath, stamp)
+    void handleFileEvent(filePath)
+  }
+}
+
+const pollTimer = setInterval(() => {
+  void scanUploadsDir()
+}, POLL_INTERVAL_MS)
+pollTimer.unref()
+
 // Graceful shutdown
 function shutdown() {
   logger.info('shutdown_initiated')
   clearInterval(heartbeatTimer)
+  clearInterval(pollTimer)
   watcher.close().then(() => process.exit(0))
 }
 
