@@ -135,6 +135,16 @@ function buildAnonymizers(operator: AnonymizationOperator): PresidioOperatorsMap
   }
 }
 
+/**
+ * Mask standalone multi-part numeric sequences that may not be recognized by
+ * Presidio. A sequence must contain at least two separators to match.
+ * Examples masked: "123-213-432", "12321:32432:2132", "123 123 123", "1.2.3"
+ * Examples not masked: "123", "123.", "12-12"
+ */
+function maskRemainingNumberSequences(text: string): string {
+  return text.replace(/(?<![A-Za-z0-9])\d+(?:[ .:-]\d+){2,}(?![A-Za-z0-9])/g, '<NUMBER>')
+}
+
 // ── Delivery helpers ─────────────────────────────────────────────────────────
 
 /** Fetch all enabled delivery targets from the API. */
@@ -334,12 +344,13 @@ export async function processFile(filePath: string): Promise<void> {
       const anonymizedContent = analysisResults.length > 0
         ? await presidio.anonymize(msg.content, analysisResults, buildAnonymizers(config.anonymizationOperator))
         : msg.content
+      const normalizedContent = maskRemainingNumberSequences(anonymizedContent)
       const messageId = msg.id ?? `msg-${index + 1}`
       const messageRole = msg.role ?? 'user'
       anonymizedMessages.push({
         id: messageId,
         role: messageRole,
-        content: anonymizedContent,
+        content: normalizedContent,
         timestamp: msg.timestamp,
         entities_found: analysisResults.length,
       })

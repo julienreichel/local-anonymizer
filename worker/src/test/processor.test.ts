@@ -334,6 +334,70 @@ describe('processFile', () => {
     expect((callBody(anonymizeCall!).anonymizers as Record<string, unknown>)).toEqual({ DEFAULT: { type: 'redact' } })
   })
 
+  it('masks remaining numeric sequences as <NUMBER> when Presidio finds no entities', async () => {
+    let deliveredBody: Record<string, unknown> | undefined
+
+    fetchMock.mockImplementation((url: string, opts?: RequestInit) => {
+      const method = opts?.method ?? 'GET'
+      if (method === 'GET' && url.includes('/api/config')) {
+        return Promise.resolve(fakeResponse({
+          ok: true,
+          data: { maxFileSizeBytes: 10 * 1024 * 1024, deleteAfterSuccess: false, deleteAfterFailure: false, anonymizationOperator: 'replace' },
+        }))
+      }
+      if (method === 'GET' && url.includes('/api/targets')) {
+        return Promise.resolve(fakeResponse({
+          ok: true,
+          data: [{
+            id: 'target-1',
+            name: 'Target',
+            url: 'https://external.example.com/webhook',
+            method: 'POST',
+            headers: {},
+            auth: { type: 'none' },
+            timeoutMs: 15000,
+            retries: 0,
+            backoffMs: 1000,
+            enabled: true,
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }],
+        }))
+      }
+      if (method === 'POST' && url.includes('/api/runs') && !url.includes('/api/runs/')) {
+        return Promise.resolve(fakeResponse({ ok: true, data: { id: 'run-1' } }, true, 201))
+      }
+      if ((method === 'PATCH' || method === 'POST') && url.includes('/api/runs/')) {
+        return Promise.resolve(fakeResponse({ ok: true, data: null }))
+      }
+      if (method === 'POST' && url.includes('/api/logs')) {
+        return Promise.resolve(fakeResponse({ ok: true, data: null }, true, 201))
+      }
+      if (method === 'POST' && url.includes('/analyze')) {
+        return Promise.resolve(fakeResponse([]))
+      }
+      if (url.includes('external.example.com')) {
+        deliveredBody = callBody([url, opts]) as Record<string, unknown>
+        return Promise.resolve(fakeResponse({ ok: true }, true, 200))
+      }
+      return Promise.resolve(fakeResponse({ ok: true, data: null }))
+    })
+
+    fsMod.stat.mockResolvedValue({ size: 512 })
+    fsMod.readFile.mockResolvedValue(chatLogJson([{
+      id: '1',
+      role: 'user',
+      content: 'A 123. B 123-213-432 C 12321:32432:2132 D 123 123 123 E 12-12',
+    }]))
+
+    const { processFile } = await importProcessor()
+    await processFile('/uploads/chat.json')
+
+    expect(deliveredBody).toBeDefined()
+    const messages = deliveredBody?.messages as Array<{ content: string }>
+    expect(messages[0]?.content).toBe('A 123. B <NUMBER> C <NUMBER> D <NUMBER> E 12-12')
+  })
+
   it('marks run as failed and does not delete file when JSON is invalid', async () => {
     setupHappyPathFetch()
     fsMod.stat.mockResolvedValue({ size: 64 })
@@ -570,4 +634,3 @@ describe('delivery targets', () => {
     expect(callBody(failPatch!).errorCode).toBe('DELIVERY_ERROR')
   })
 })
-
