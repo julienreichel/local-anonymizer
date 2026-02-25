@@ -32,9 +32,14 @@
           <span class="font-mono text-sm text-gray-500">{{ shortHash(row.sourceFileName) }}</span>
         </template>
         <template #status-data="{ row }">
-          <UBadge :color="statusColor(row.status)" variant="soft" size="xs">
-            {{ row.status }}
-          </UBadge>
+          <div class="flex items-center gap-1">
+            <UBadge :color="statusColor(displayStatus(row))" variant="soft" size="xs">
+              {{ displayStatus(row) }}
+            </UBadge>
+            <UBadge v-if="isCleanupDeleted(row)" color="gray" variant="soft" size="xs">
+              deleted
+            </UBadge>
+          </div>
         </template>
         <template #sourceFileSize-data="{ row }">
           <span class="text-sm text-gray-500">{{ formatBytes(row.sourceFileSize) }}</span>
@@ -74,7 +79,10 @@
               <h3 class="text-lg font-semibold">Run Details</h3>
               <p class="text-xs font-mono text-gray-400 mt-0.5">{{ selectedRun.id }}</p>
             </div>
-            <UBadge :color="statusColor(selectedRun.status)" variant="soft">{{ selectedRun.status }}</UBadge>
+            <div class="flex items-center gap-1">
+              <UBadge :color="statusColor(displayStatus(selectedRun))" variant="soft">{{ displayStatus(selectedRun) }}</UBadge>
+              <UBadge v-if="isCleanupDeleted(selectedRun)" color="gray" variant="soft">deleted</UBadge>
+            </div>
           </div>
         </template>
 
@@ -297,6 +305,18 @@ function statusColor(status: string): 'green' | 'red' | 'blue' | 'purple' | 'yel
     deleted: 'gray',
   }
   return map[status] ?? 'gray'
+}
+
+function isCleanupDeleted(run: ProcessingRun): boolean {
+  return run.status === 'deleted'
+}
+
+function displayStatus(run: ProcessingRun): string {
+  if (run.status !== 'deleted') return run.status
+  if ((run.deliveryFailureCount ?? 0) > 0 || run.errorCode) return 'failed'
+  if ((run.deliverySuccessCount ?? 0) > 0) return 'delivered'
+  if (run.deliveryStatusCode !== undefined) return run.deliveryStatusCode < 400 ? 'delivered' : 'failed'
+  return 'deleted'
 }
 
 function formatBytes(bytes: number): string {
