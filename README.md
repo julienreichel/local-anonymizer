@@ -29,12 +29,13 @@ Open `.env` and set, at minimum:
 # Absolute or relative path to the watched folder
 UPLOADS_DIR=./infra/volumes/uploads
 
-# Where the anonymized payload should be delivered
+# (Optional) Legacy single-target delivery – still supported as a fallback
+# when no Delivery Targets are configured in the dashboard.
 TARGET_URL=https://your-ingest-endpoint.example.com/ingest
-
-# Optional Bearer token for the delivery endpoint
 TARGET_AUTH_HEADER=Bearer eyJhb...
 ```
+
+> **Recommended**: use the **Delivery Targets** feature in the dashboard instead of `TARGET_URL` — it gives you full control over the HTTP method, headers, auth, and payload format for each destination.
 
 ### 2. Start all services
 
@@ -54,7 +55,7 @@ From the dashboard you can:
 
 - Monitor total / delivered / failed / pending runs
 - Browse audit logs (file hash, size, status – **no PII stored**)
-- Configure delivery targets and anonymization settings
+- Configure **Delivery Targets** (URL, method, auth, payload template) and anonymization settings
 
 ### 4. Drop a test file
 
@@ -64,7 +65,81 @@ Copy the provided fixture into the uploads folder and watch it get processed:
 cp fixtures/chat-valid.json infra/volumes/uploads/
 ```
 
-The worker picks it up within 5 seconds, anonymizes every message, posts to `TARGET_URL`, and records the result in the dashboard.
+The worker picks it up within 5 seconds, anonymizes every message, delivers the result to all enabled Delivery Targets, and records the result in the dashboard.
+
+---
+
+## Delivery Targets
+
+Delivery Targets are the primary way to send anonymized payloads to external services. Each target is fully configurable: URL, HTTP method, request headers, authentication, and an optional payload template. Multiple targets can be active at the same time — the worker calls all enabled targets in sequence after each file is processed.
+
+Configure targets from the dashboard or via the REST API (`POST /api/targets`).
+
+### Auth types
+
+| Type | Config |
+|---|---|
+| None | `{ "type": "none" }` |
+| Bearer token | `{ "type": "bearerToken", "token": "<token>" }` |
+| API key header | `{ "type": "apiKeyHeader", "header": "X-API-Key", "key": "<key>" }` |
+| HTTP Basic | `{ "type": "basic", "username": "user", "password": "pass" }` |
+
+### Body template
+
+By default the full anonymized result is sent. Set `bodyTemplate` on a target to control exactly what is sent:
+
+```json
+{
+  "messages": "${messages}",
+  "conversationId": "${source_file_hash}",
+  "languageCode": "en"
+}
+```
+
+Available template variables:
+
+| Variable | Value |
+|---|---|
+| `${messages}` | Anonymized messages as `[{ role, content, timestamp? }]` |
+| `${source_file_hash}` | SHA-256 hash of the source filename |
+| `${processed_at}` | ISO-8601 processing timestamp |
+| `${byte_size}` | File size in bytes |
+| `${metadata}` | Optional metadata object from the chat log |
+
+### Example: two endpoints on the same analysis service
+
+```json
+[
+  {
+    "name": "Sentiment Analysis",
+    "url": "https://analysis.example.com/api/v1/analysis/sentiment",
+    "method": "POST",
+    "auth": { "type": "apiKeyHeader", "header": "X-API-Key", "key": "your-key" },
+    "bodyTemplate": {
+      "messages": "${messages}",
+      "conversationId": "${source_file_hash}",
+      "languageCode": "en",
+      "model": "gpt-4",
+      "channel": "web-chat",
+      "tags": ["support"]
+    }
+  },
+  {
+    "name": "Toxicity Analysis",
+    "url": "https://analysis.example.com/api/v1/analysis/toxicity",
+    "method": "POST",
+    "auth": { "type": "apiKeyHeader", "header": "X-API-Key", "key": "your-key" },
+    "bodyTemplate": {
+      "messages": "${messages}",
+      "conversationId": "${source_file_hash}"
+    }
+  }
+]
+```
+
+### Legacy `TARGET_URL` fallback
+
+The `TARGET_URL` and `TARGET_AUTH_HEADER` environment variables are still supported. They are used **only** when no Delivery Targets are configured in the database. New deployments should use the Delivery Target system instead.
 
 ---
 
@@ -77,8 +152,8 @@ All runtime settings are managed through the REST API and persisted in SQLite. T
 | Variable | Default | Description |
 |---|---|---|
 | `UPLOADS_DIR` | `./infra/volumes/uploads` | Host path bind-mounted into the worker |
-| `TARGET_URL` | _(empty)_ | Delivery endpoint; if empty, delivery is skipped |
-| `TARGET_AUTH_HEADER` | _(empty)_ | Full `Authorization` header value (e.g. `Bearer <token>`) |
+| `TARGET_URL` | _(empty)_ | **Legacy fallback** delivery endpoint — used only when no Delivery Targets are configured in the DB; if empty, delivery is skipped |
+| `TARGET_AUTH_HEADER` | _(empty)_ | **Legacy fallback** full `Authorization` header value (e.g. `Bearer <token>`) |
 | `LANGUAGE` | `en` | BCP-47 language code passed to Presidio |
 | `DATA_DIR` | `./infra/volumes/data` | Host path for SQLite database persistence |
 | `API_PORT` | `3001` | Exposed port for the REST API |
@@ -306,7 +381,7 @@ See [SECURITY.md](./SECURITY.md) for the full no-PII logging policy and threat m
 
 - **No PII in logs**: only the SHA-256 hash of the original filename, byte size, and processing status are stored in the database.
 - **Anonymized delivery only**: the payload sent to `TARGET_URL` contains Presidio-anonymized messages – raw content is never delivered.
-- **No telemetry**: nothing is sent to external services except the configured `TARGET_URL`.
+- **No telemetry**: nothing is sent to external services except the configured Delivery Targets (or the legacy `TARGET_URL`).
 
 ---
 
