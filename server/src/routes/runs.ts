@@ -58,6 +58,13 @@ const ListQuerySchema = z.object({
   q: z.string().optional(),
 })
 
+type RunStats = {
+  total: number
+  delivered: number
+  failed: number
+  pending: number
+}
+
 const CreateBodySchema = ProcessingRunSchema.omit({ id: true, createdAt: true, updatedAt: true })
 
 const UpdateBodySchema = z.object({
@@ -74,6 +81,33 @@ const UpdateBodySchema = z.object({
 })
 
 export async function runRoutes(app: FastifyInstance): Promise<void> {
+  // GET /api/runs/stats – aggregate run counts for dashboard summary
+  app.get('/api/runs/stats', async (_req, reply) => {
+    const db = getDb()
+    const row = db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN status IN ('queued', 'processing', 'anonymized') THEN 1 ELSE 0 END) AS pending
+      FROM processing_runs
+    `).get() as {
+      total: number | null
+      delivered: number | null
+      failed: number | null
+      pending: number | null
+    } | undefined
+
+    const stats: RunStats = {
+      total: row?.total ?? 0,
+      delivered: row?.delivered ?? 0,
+      failed: row?.failed ?? 0,
+      pending: row?.pending ?? 0,
+    }
+
+    return reply.send(okResponse(stats))
+  })
+
   // GET /api/runs – list runs with optional filters
   app.get<{ Querystring: z.infer<typeof ListQuerySchema> }>('/api/runs', async (req, reply) => {
     const parsed = ListQuerySchema.safeParse(req.query)

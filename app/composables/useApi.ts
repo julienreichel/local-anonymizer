@@ -32,6 +32,13 @@ export const ProcessingRunSchema = z.object({
   durationMs: z.number().optional(),
 })
 
+export const RunStatsSchema = z.object({
+  total: z.number(),
+  delivered: z.number(),
+  failed: z.number(),
+  pending: z.number(),
+})
+
 export const AppConfigSchema = z.object({
   watchFolderPath: z.string().default('/uploads'),
   deleteAfterSuccess: z.boolean().default(false),
@@ -101,6 +108,7 @@ export const HealthSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export type ProcessingRun = z.infer<typeof ProcessingRunSchema>
+export type RunStats = z.infer<typeof RunStatsSchema>
 export type AppConfig = z.infer<typeof AppConfigSchema>
 export type DeliveryTarget = z.infer<typeof DeliveryTargetSchema>
 export type AuditLogEvent = z.infer<typeof AuditLogEventSchema>
@@ -227,6 +235,7 @@ export function useApi() {
       const query = qs.toString()
       return get(`/api/runs${query ? `?${query}` : ''}`, z.array(ProcessingRunSchema))
     },
+    getRunStats: () => get('/api/runs/stats', RunStatsSchema),
     getRun: (id: string) => get(`/api/runs/${id}`, ProcessingRunSchema),
 
     // Audit logs

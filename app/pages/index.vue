@@ -154,14 +154,14 @@ const { data: rawRuns, pending: runsPending, refresh: refreshRuns } = await useL
 
 const recentRuns = computed(() => rawRuns.value ?? [])
 
+const { data: rawStats, refresh: refreshStats } = await useLazyAsyncData(
+  'dashboard-run-stats',
+  () => api.getRunStats(),
+  { default: () => ({ total: 0, delivered: 0, failed: 0, pending: 0 }) },
+)
+
 const stats = computed(() => {
-  const runs = rawRuns.value ?? []
-  return {
-    total: runs.length,
-    delivered: runs.filter((r) => r.status === 'delivered').length,
-    failed: runs.filter((r) => r.status === 'failed').length,
-    pending: runs.filter((r) => ['queued', 'processing', 'anonymized'].includes(r.status)).length,
-  }
+  return rawStats.value ?? { total: 0, delivered: 0, failed: 0, pending: 0 }
 })
 
 const columns = [
@@ -217,7 +217,7 @@ function shortHash(value: string): string {
 }
 
 async function refreshAll() {
-  await Promise.all([refreshHealth(), refreshRuns()])
+  await Promise.all([refreshHealth(), refreshRuns(), refreshStats()])
 }
 
 onMounted(() => {
